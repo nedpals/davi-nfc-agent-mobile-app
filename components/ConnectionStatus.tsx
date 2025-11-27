@@ -19,7 +19,8 @@ const statusConfig: Record<
 };
 
 export function ConnectionStatus({ status, serverUrl }: ConnectionStatusProps) {
-  const config = statusConfig[status];
+  // Default to disconnected if status is undefined (during store hydration)
+  const config = statusConfig[status] ?? statusConfig.disconnected;
 
   return (
     <View style={styles.container}>
