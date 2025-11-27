@@ -44,6 +44,12 @@ export default function ScannerScreen() {
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>DAVI NFC Scanner</Text>
+        <TouchableOpacity
+          style={styles.settingsButton}
+          onPress={() => router.push("/settings")}
+        >
+          <Text style={styles.settingsIcon}>⚙</Text>
+        </TouchableOpacity>
       </View>
 
       <ConnectionStatus
@@ -94,14 +100,6 @@ export default function ScannerScreen() {
         </View>
       )}
 
-      <View style={styles.footer}>
-        <TouchableOpacity
-          style={styles.footerButton}
-          onPress={() => router.push("/settings")}
-        >
-          <Text style={styles.footerButtonText}>Settings</Text>
-        </TouchableOpacity>
-      </View>
     </SafeAreaView>
   );
 }
@@ -112,6 +110,9 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
   },
   header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
     paddingHorizontal: 16,
     paddingVertical: 16,
   },
@@ -119,6 +120,18 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: "700",
     color: "#1F2937",
+  },
+  settingsButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#F3F4F6",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  settingsIcon: {
+    fontSize: 20,
+    color: "#374151",
   },
   errorBanner: {
     backgroundColor: "#FEE2E2",
@@ -169,20 +182,5 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "600",
     color: "#6B7280",
-  },
-  footer: {
-    paddingHorizontal: 16,
-    paddingBottom: 16,
-  },
-  footerButton: {
-    backgroundColor: "#F3F4F6",
-    paddingVertical: 16,
-    borderRadius: 12,
-    alignItems: "center",
-  },
-  footerButtonText: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#374151",
   },
 });
