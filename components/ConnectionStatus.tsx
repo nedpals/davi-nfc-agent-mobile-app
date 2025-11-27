@@ -1,9 +1,10 @@
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from "react-native";
 import type { ConnectionStatus as ConnectionStatusType } from "@/types/protocol";
+import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
 interface ConnectionStatusProps {
   status: ConnectionStatusType;
   serverUrl?: string | null;
+  deviceName?: string;
   isSearching?: boolean;
   onPress?: () => void;
 }
@@ -20,9 +21,16 @@ const statusConfig: Record<
   error: { color: "#EF4444", label: "Error" },
 };
 
-export function ConnectionStatus({ status, serverUrl, isSearching, onPress }: ConnectionStatusProps) {
+export function ConnectionStatus({ status, serverUrl, deviceName, isSearching, onPress }: ConnectionStatusProps) {
   // Default to disconnected if status is undefined (during store hydration)
   const config = statusConfig[status] ?? statusConfig.disconnected;
+
+  const getStatusLabel = () => {
+    if (status === "registered" && deviceName) {
+      return `Registered as "${deviceName}"`;
+    }
+    return config.label;
+  };
 
   const getSubText = () => {
     if (serverUrl && status !== "disconnected") {
@@ -52,7 +60,7 @@ export function ConnectionStatus({ status, serverUrl, isSearching, onPress }: Co
         <View style={[styles.indicator, { backgroundColor: config.color }]} />
       )}
       <View style={styles.textContainer}>
-        <Text style={styles.statusText}>{config.label}</Text>
+        <Text style={styles.statusText}>{getStatusLabel()}</Text>
         {subText && (
           <Text style={styles.serverText} numberOfLines={1}>
             {subText}

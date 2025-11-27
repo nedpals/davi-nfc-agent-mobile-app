@@ -4,11 +4,11 @@ import { useRouter } from "expo-router";
 import { useConnection, useNFC, useAutoConnect } from "@/hooks";
 import { ConnectionStatus } from "@/components/ConnectionStatus";
 import { ScanButton } from "@/components/ScanButton";
-import { TagCard } from "@/components/TagCard";
+import { TagDrawer } from "@/components/TagDrawer";
 
 export default function ScannerScreen() {
   const router = useRouter();
-  const { status, serverUrl, isRegistered } = useConnection();
+  const { status, serverUrl, deviceName, isRegistered } = useConnection();
   const { isSearching } = useAutoConnect();
   const {
     isSupported,
@@ -55,6 +55,7 @@ export default function ScannerScreen() {
       <ConnectionStatus
         status={status}
         serverUrl={serverUrl}
+        deviceName={deviceName}
         isSearching={isSearching}
         onPress={() => router.push("/(modals)/server-list")}
       />
@@ -78,28 +79,17 @@ export default function ScannerScreen() {
         )}
         {isActive && !processingEnabled && (
           <Text style={styles.pausedText}>
-            Scanning paused - NFC still captured
+            Scanning paused
           </Text>
         )}
         {!isRegistered && status !== "disconnected" && (
           <Text style={styles.warningText}>
-            Not registered - tags will be saved locally
+            Not registered - tags saved locally
           </Text>
         )}
       </View>
 
-      {lastTag && (
-        <View style={styles.tagSection}>
-          <TagCard tag={lastTag} />
-          <TouchableOpacity
-            style={styles.clearButton}
-            onPress={clearLastTag}
-          >
-            <Text style={styles.clearButtonText}>Clear</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
+      <TagDrawer tag={lastTag} onClear={clearLastTag} />
     </SafeAreaView>
   );
 }
@@ -107,38 +97,44 @@ export default function ScannerScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "#F8FAFB",
   },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 16,
+    paddingHorizontal: 20,
     paddingVertical: 16,
   },
   title: {
-    fontSize: 28,
+    fontSize: 24,
     fontWeight: "700",
-    color: "#1F2937",
+    color: "#1F4E5F",
+    letterSpacing: 0.5,
   },
   settingsButton: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: "#F3F4F6",
+    backgroundColor: "#FFFFFF",
     justifyContent: "center",
     alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
   },
   settingsIcon: {
     fontSize: 20,
-    color: "#374151",
+    color: "#1F4E5F",
   },
   errorBanner: {
     backgroundColor: "#FEE2E2",
     padding: 12,
-    marginHorizontal: 16,
+    marginHorizontal: 20,
     marginTop: 12,
-    borderRadius: 8,
+    borderRadius: 12,
   },
   errorText: {
     color: "#DC2626",
@@ -148,16 +144,17 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
+    paddingBottom: 20,
   },
   activeText: {
-    marginTop: 16,
-    fontSize: 14,
-    color: "#10B981",
+    marginTop: 24,
+    fontSize: 15,
+    color: "#00A4E4",
     fontWeight: "500",
   },
   pausedText: {
-    marginTop: 16,
-    fontSize: 14,
+    marginTop: 24,
+    fontSize: 15,
     color: "#6B7280",
     fontWeight: "500",
   },
@@ -165,22 +162,5 @@ const styles = StyleSheet.create({
     marginTop: 8,
     fontSize: 12,
     color: "#F59E0B",
-  },
-  tagSection: {
-    marginBottom: 16,
-    paddingHorizontal: 16,
-  },
-  clearButton: {
-    marginTop: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 24,
-    backgroundColor: "#F3F4F6",
-    borderRadius: 8,
-    alignSelf: "center",
-  },
-  clearButtonText: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#6B7280",
   },
 });
