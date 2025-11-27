@@ -1,9 +1,11 @@
-import { View, Text, StyleSheet } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from "react-native";
 import type { ConnectionStatus as ConnectionStatusType } from "@/types/protocol";
 
 interface ConnectionStatusProps {
   status: ConnectionStatusType;
   serverUrl?: string | null;
+  isSearching?: boolean;
+  onPress?: () => void;
 }
 
 const statusConfig: Record<
@@ -18,22 +20,49 @@ const statusConfig: Record<
   error: { color: "#EF4444", label: "Error" },
 };
 
-export function ConnectionStatus({ status, serverUrl }: ConnectionStatusProps) {
+export function ConnectionStatus({ status, serverUrl, isSearching, onPress }: ConnectionStatusProps) {
   // Default to disconnected if status is undefined (during store hydration)
   const config = statusConfig[status] ?? statusConfig.disconnected;
 
+  const getSubText = () => {
+    if (serverUrl && status !== "disconnected") {
+      return serverUrl;
+    }
+    if (isSearching) {
+      return "Searching for servers...";
+    }
+    if (status === "disconnected") {
+      return "Tap to find servers";
+    }
+    return null;
+  };
+
+  const subText = getSubText();
+  const showSpinner = isSearching && status === "disconnected";
+
   return (
-    <View style={styles.container}>
-      <View style={[styles.indicator, { backgroundColor: config.color }]} />
+    <TouchableOpacity
+      style={styles.container}
+      onPress={onPress}
+      activeOpacity={onPress ? 0.7 : 1}
+    >
+      {showSpinner ? (
+        <ActivityIndicator size="small" color="#3B82F6" style={styles.spinner} />
+      ) : (
+        <View style={[styles.indicator, { backgroundColor: config.color }]} />
+      )}
       <View style={styles.textContainer}>
         <Text style={styles.statusText}>{config.label}</Text>
-        {serverUrl && status !== "disconnected" && (
+        {subText && (
           <Text style={styles.serverText} numberOfLines={1}>
-            {serverUrl}
+            {subText}
           </Text>
         )}
       </View>
-    </View>
+      {onPress && (
+        <Text style={styles.arrow}>›</Text>
+      )}
+    </TouchableOpacity>
   );
 }
 
@@ -52,6 +81,11 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     marginRight: 12,
   },
+  spinner: {
+    width: 12,
+    height: 12,
+    marginRight: 12,
+  },
   textContainer: {
     flex: 1,
   },
@@ -64,5 +98,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#6B7280",
     marginTop: 2,
+  },
+  arrow: {
+    fontSize: 20,
+    color: "#9CA3AF",
+    marginLeft: 8,
   },
 });

@@ -1,7 +1,7 @@
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { useConnection, useNFC } from "@/hooks";
+import { useConnection, useNFC, useAutoConnect } from "@/hooks";
 import { ConnectionStatus } from "@/components/ConnectionStatus";
 import { ScanButton } from "@/components/ScanButton";
 import { TagCard } from "@/components/TagCard";
@@ -9,6 +9,7 @@ import { TagCard } from "@/components/TagCard";
 export default function ScannerScreen() {
   const router = useRouter();
   const { status, serverUrl, isRegistered } = useConnection();
+  const { isSearching } = useAutoConnect();
   const {
     isSupported,
     isEnabled,
@@ -45,7 +46,12 @@ export default function ScannerScreen() {
         <Text style={styles.title}>DAVI NFC Scanner</Text>
       </View>
 
-      <ConnectionStatus status={status} serverUrl={serverUrl} />
+      <ConnectionStatus
+        status={status}
+        serverUrl={serverUrl}
+        isSearching={isSearching}
+        onPress={() => router.push("/(modals)/server-list")}
+      />
 
       {initError && (
         <View style={styles.errorBanner}>
@@ -89,13 +95,6 @@ export default function ScannerScreen() {
       )}
 
       <View style={styles.footer}>
-        <TouchableOpacity
-          style={styles.footerButton}
-          onPress={() => router.push("/(modals)/server-list")}
-        >
-          <Text style={styles.footerButtonText}>Find Servers</Text>
-        </TouchableOpacity>
-
         <TouchableOpacity
           style={styles.footerButton}
           onPress={() => router.push("/settings")}
@@ -172,13 +171,10 @@ const styles = StyleSheet.create({
     color: "#6B7280",
   },
   footer: {
-    flexDirection: "row",
     paddingHorizontal: 16,
     paddingBottom: 16,
-    gap: 12,
   },
   footerButton: {
-    flex: 1,
     backgroundColor: "#F3F4F6",
     paddingVertical: 16,
     borderRadius: 12,
