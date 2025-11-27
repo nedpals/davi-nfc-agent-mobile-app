@@ -6,6 +6,7 @@ import type {
   RegisterDeviceMessage,
   RegisterDeviceResponse,
   TagScannedMessage,
+  TagRemovedMessage,
   DeviceHeartbeatMessage,
   ErrorMessage,
   TagScannedPayload,
@@ -166,6 +167,28 @@ class WebSocketService {
 
     this.send(message);
     store.markTagSent(tagData.uid);
+  }
+
+  sendTagRemoved(uid: string): void {
+    const store = useAppStore.getState();
+    const deviceId = store.device.deviceId;
+
+    if (!deviceId) {
+      console.error("[WebSocket] Cannot send tag removed: device not registered");
+      return;
+    }
+
+    const message: TagRemovedMessage = {
+      type: "tagRemoved",
+      payload: {
+        deviceID: deviceId,
+        uid,
+        removedAt: new Date().toISOString(),
+      },
+    };
+
+    this.send(message);
+    console.log("[WebSocket] Sent tagRemoved for uid:", uid);
   }
 
   private sendHeartbeat(): void {

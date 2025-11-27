@@ -10,7 +10,6 @@ class NFCService {
   private isForegroundActive = false;
   private appStateSubscription: ReturnType<typeof AppState.addEventListener> | null = null;
   private onTagDiscovered: ((tag: ScannedTag) => void) | null = null;
-  private currentTagId: string | null = null;
 
   private constructor() {}
 
@@ -140,7 +139,6 @@ class NFCService {
     console.log("[NFC] Disabling foreground dispatch");
 
     this.isForegroundActive = false;
-    this.currentTagId = null;
 
     try {
       // Remove event listener
@@ -152,7 +150,6 @@ class NFCService {
     }
 
     store.setNFCActive(false);
-    store.setTagPresent(false);
     console.log("[NFC] Foreground dispatch disabled");
   }
 
@@ -161,19 +158,6 @@ class NFCService {
     console.log("[NFC] Tag discovered:", tagId);
 
     const store = useAppStore.getState();
-
-    // Always mark tag as present
-    store.setTagPresent(true);
-
-    // Check if this is the same tag (already processed)
-    const formattedId = this.formatUID(tagId);
-    if (this.currentTagId === formattedId) {
-      console.log("[NFC] Same tag still present, skipping");
-      return;
-    }
-
-    // Track current tag
-    this.currentTagId = formattedId;
 
     // Check if processing is enabled (user toggle)
     if (!store.nfc.processingEnabled) {
@@ -207,6 +191,20 @@ class NFCService {
     } catch (error) {
       console.error("[NFC] Error processing discovered tag:", error);
     }
+  }
+
+  // Call this method to clear the last scanned tag (e.g., via a button)
+  clearLastTag(): void {
+    console.log("[NFC] Clearing last tag");
+    const store = useAppStore.getState();
+    const lastTag = store.nfc.lastTag;
+
+    // Notify server that tag is no longer present
+    if (lastTag && websocketService.isRegistered()) {
+      websocketService.sendTagRemoved(lastTag.uid);
+    }
+
+    store.setLastTag(null);
   }
 
   private processTag(tag: any): ScannedTag | null {
@@ -256,10 +254,6 @@ class NFCService {
   setProcessingEnabled(enabled: boolean): void {
     useAppStore.getState().setProcessingEnabled(enabled);
     console.log("[NFC] Processing", enabled ? "enabled" : "disabled");
-  }
-
-  clearCurrentTag(): void {
-    this.currentTagId = null;
   }
 
   private formatUID(id: string | number[] | undefined): string {

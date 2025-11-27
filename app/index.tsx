@@ -14,9 +14,9 @@ export default function ScannerScreen() {
     isEnabled,
     isActive,
     processingEnabled,
-    tagPresent,
     lastTag,
     toggleProcessing,
+    clearLastTag,
     initError
   } = useNFC();
 
@@ -57,10 +57,9 @@ export default function ScannerScreen() {
         <ScanButton
           onPress={handleToggleProcessing}
           processingEnabled={processingEnabled}
-          tagPresent={tagPresent}
           disabled={!canToggle}
         />
-        {isActive && processingEnabled && !tagPresent && (
+        {isActive && processingEnabled && (
           <Text style={styles.activeText}>
             Hold device near NFC tag
           </Text>
@@ -80,6 +79,12 @@ export default function ScannerScreen() {
       {lastTag && (
         <View style={styles.tagSection}>
           <TagCard tag={lastTag} />
+          <TouchableOpacity
+            style={styles.clearButton}
+            onPress={clearLastTag}
+          >
+            <Text style={styles.clearButtonText}>Clear</Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -151,6 +156,20 @@ const styles = StyleSheet.create({
   },
   tagSection: {
     marginBottom: 16,
+    paddingHorizontal: 16,
+  },
+  clearButton: {
+    marginTop: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 24,
+    backgroundColor: "#F3F4F6",
+    borderRadius: 8,
+    alignSelf: "center",
+  },
+  clearButtonText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#6B7280",
   },
   footer: {
     flexDirection: "row",

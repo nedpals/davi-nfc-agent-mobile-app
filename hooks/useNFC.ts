@@ -60,13 +60,17 @@ export function useNFC() {
     return await nfcService.checkEnabled();
   }, []);
 
+  // Clear the last scanned tag
+  const clearLastTag = useCallback(() => {
+    nfcService.clearLastTag();
+  }, []);
+
   return {
     // State
     isSupported: nfc.isSupported,
     isEnabled: nfc.isEnabled,
     isActive: nfc.isActive, // Whether NFC foreground dispatch is active
     processingEnabled: nfc.processingEnabled, // Whether tags are being processed
-    tagPresent: nfc.tagPresent, // Whether a tag is currently on the reader
     isInitialized,
     initError,
 
@@ -79,6 +83,7 @@ export function useNFC() {
     enableProcessing,
     disableProcessing,
     checkEnabled,
+    clearLastTag,
     clearHistory: useAppStore.getState().clearScanHistory,
   };
 }

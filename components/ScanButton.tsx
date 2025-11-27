@@ -8,22 +8,19 @@ import {
 interface ScanButtonProps {
   onPress: () => void;
   processingEnabled: boolean;
-  tagPresent: boolean;
   disabled?: boolean;
 }
 
-export function ScanButton({ onPress, processingEnabled, tagPresent, disabled }: ScanButtonProps) {
+export function ScanButton({ onPress, processingEnabled, disabled }: ScanButtonProps) {
   const getButtonStyle = () => {
     if (disabled) return styles.buttonDisabled;
-    if (tagPresent && processingEnabled) return styles.buttonTagPresent;
     if (processingEnabled) return styles.buttonActive;
     return styles.buttonInactive;
   };
 
   const getStatusText = () => {
     if (!processingEnabled) return "Paused";
-    if (tagPresent) return "Tag Detected";
-    return "Ready";
+    return "Scanning";
   };
 
   const getSubText = () => {
@@ -32,7 +29,6 @@ export function ScanButton({ onPress, processingEnabled, tagPresent, disabled }:
   };
 
   const getIcon = () => {
-    if (tagPresent && processingEnabled) return "✓";
     if (processingEnabled) return "📡";
     return "⏸";
   };
@@ -74,10 +70,6 @@ const styles = StyleSheet.create({
   buttonInactive: {
     backgroundColor: "#6B7280",
     shadowColor: "#6B7280",
-  },
-  buttonTagPresent: {
-    backgroundColor: "#3B82F6",
-    shadowColor: "#3B82F6",
   },
   buttonDisabled: {
     backgroundColor: "#9CA3AF",

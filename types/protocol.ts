@@ -88,6 +88,18 @@ export interface TagScannedMessage extends BaseMessage {
   payload: TagScannedPayload;
 }
 
+// Tag removed
+export interface TagRemovedPayload {
+  deviceID: string;
+  uid: string;
+  removedAt: string;
+}
+
+export interface TagRemovedMessage extends BaseMessage {
+  type: "tagRemoved";
+  payload: TagRemovedPayload;
+}
+
 // Heartbeat
 export interface DeviceHeartbeatPayload {
   deviceID: string;
@@ -115,6 +127,7 @@ export interface ErrorMessage extends BaseMessage {
 export type OutgoingMessage =
   | RegisterDeviceMessage
   | TagScannedMessage
+  | TagRemovedMessage
   | DeviceHeartbeatMessage;
 
 export type IncomingMessage = RegisterDeviceResponse | ErrorMessage;

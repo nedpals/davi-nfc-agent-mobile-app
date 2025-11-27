@@ -34,7 +34,6 @@ interface NFCState {
   isEnabled: boolean | null;
   isActive: boolean; // Whether NFC foreground dispatch is active (capturing NFC from OS)
   processingEnabled: boolean; // Whether to process incoming tags (user toggle)
-  tagPresent: boolean; // Whether a tag is currently on the reader
   lastTag: ScannedTag | null;
   scanHistory: ScannedTag[];
 }
@@ -68,7 +67,6 @@ interface AppStore {
   setNFCEnabled: (enabled: boolean | null) => void;
   setNFCActive: (active: boolean) => void;
   setProcessingEnabled: (enabled: boolean) => void;
-  setTagPresent: (present: boolean) => void;
   setLastTag: (tag: ScannedTag | null) => void;
   addScannedTag: (tag: ScannedTag) => void;
   markTagSent: (uid: string) => void;
@@ -115,7 +113,6 @@ const initialNFCState: NFCState = {
   isEnabled: null,
   isActive: false,
   processingEnabled: true, // Process tags by default
-  tagPresent: false,
   lastTag: null,
   scanHistory: [],
 };
@@ -185,10 +182,6 @@ export const useAppStore = create<AppStore>()(
       setProcessingEnabled: (processingEnabled) =>
         set((state) => ({
           nfc: { ...state.nfc, processingEnabled },
-        })),
-      setTagPresent: (tagPresent) =>
-        set((state) => ({
-          nfc: { ...state.nfc, tagPresent },
         })),
       setLastTag: (lastTag) =>
         set((state) => ({
@@ -312,7 +305,6 @@ export const useAppStore = create<AppStore>()(
           // Always start with processing enabled
           state.nfc.processingEnabled = true;
           state.nfc.isActive = false;
-          state.nfc.tagPresent = false;
         }
       },
     }
