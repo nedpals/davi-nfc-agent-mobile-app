@@ -1,5 +1,5 @@
-import NfcManager, { NfcTech, Ndef, NfcEvents } from "react-native-nfc-manager";
-import { Platform } from "react-native";
+import NfcManager, { Ndef, NfcEvents, NfcAdapter } from "react-native-nfc-manager";
+import { Platform, AppState, type AppStateStatus } from "react-native";
 import { useAppStore } from "@/stores";
 import { websocketService } from "./websocket";
 import type { NDEFMessage, NDEFRecord, ScannedTag } from "@/types/protocol";
@@ -7,6 +7,10 @@ import type { NDEFMessage, NDEFRecord, ScannedTag } from "@/types/protocol";
 class NFCService {
   private static instance: NFCService;
   private isInitialized = false;
+  private isForegroundActive = false;
+  private appStateSubscription: ReturnType<typeof AppState.addEventListener> | null = null;
+  private onTagDiscovered: ((tag: ScannedTag) => void) | null = null;
+  private currentTagId: string | null = null;
 
   private constructor() {}
 
@@ -42,6 +46,9 @@ class NFCService {
       const enabled = await NfcManager.isEnabled();
       store.setNFCEnabled(enabled);
 
+      // Set up app state listener to manage NFC when app goes to background/foreground
+      this.setupAppStateListener();
+
       return { supported, enabled };
     } catch (error) {
       console.error("[NFC] Initialization failed:", error);
@@ -50,89 +57,209 @@ class NFCService {
     }
   }
 
-  async scanTag(): Promise<ScannedTag | null> {
-    const store = useAppStore.getState();
+  private setupAppStateListener(): void {
+    if (this.appStateSubscription) {
+      return;
+    }
 
+    this.appStateSubscription = AppState.addEventListener(
+      "change",
+      this.handleAppStateChange.bind(this)
+    );
+  }
+
+  private async handleAppStateChange(nextAppState: AppStateStatus): Promise<void> {
+    if (nextAppState === "active") {
+      console.log("[NFC] App became active");
+      // Re-enable foreground dispatch when app becomes active
+      if (!this.isForegroundActive) {
+        // Small delay to ensure clean state
+        await new Promise(resolve => setTimeout(resolve, 500));
+        if (!this.isForegroundActive) {
+          await this.enableForegroundDispatch();
+        }
+      }
+    } else if (nextAppState === "background") {
+      console.log("[NFC] App going to background");
+      // Disable foreground dispatch when going to background
+      await this.disableForegroundDispatch();
+    }
+    // Don't react to "inactive" - it's a transitional state
+  }
+
+  async enableForegroundDispatch(): Promise<void> {
     if (!this.isInitialized) {
       console.error("[NFC] Service not initialized");
+      return;
+    }
+
+    if (this.isForegroundActive) {
+      console.log("[NFC] Foreground dispatch already active");
+      return;
+    }
+
+    const store = useAppStore.getState();
+
+    try {
+      console.log("[NFC] Enabling foreground dispatch with reader mode");
+
+      // Set up the tag discovery event listener
+      NfcManager.setEventListener(NfcEvents.DiscoverTag, this.handleDiscoveredTag.bind(this));
+
+      // Register for tag events with reader mode enabled for continuous scanning
+      // This enables Android's ReaderMode which takes over NFC from the OS
+      await NfcManager.registerTagEvent({
+        isReaderModeEnabled: true,
+        readerModeFlags:
+          NfcAdapter.FLAG_READER_NFC_A |
+          NfcAdapter.FLAG_READER_NFC_B |
+          NfcAdapter.FLAG_READER_NFC_F |
+          NfcAdapter.FLAG_READER_NFC_V |
+          NfcAdapter.FLAG_READER_NO_PLATFORM_SOUNDS,
+        readerModeDelay: 20,
+      });
+
+      this.isForegroundActive = true;
+      store.setNFCActive(true);
+      console.log("[NFC] Foreground dispatch enabled - ready to scan tags");
+    } catch (error) {
+      console.error("[NFC] Failed to enable foreground dispatch:", error);
+      this.isForegroundActive = false;
+      store.setNFCActive(false);
+      throw error;
+    }
+  }
+
+  async disableForegroundDispatch(): Promise<void> {
+    if (!this.isForegroundActive) {
+      return;
+    }
+
+    const store = useAppStore.getState();
+
+    console.log("[NFC] Disabling foreground dispatch");
+
+    this.isForegroundActive = false;
+    this.currentTagId = null;
+
+    try {
+      // Remove event listener
+      NfcManager.setEventListener(NfcEvents.DiscoverTag, null);
+      // Unregister tag event
+      await NfcManager.unregisterTagEvent();
+    } catch {
+      // Ignore - might not be registered
+    }
+
+    store.setNFCActive(false);
+    store.setTagPresent(false);
+    console.log("[NFC] Foreground dispatch disabled");
+  }
+
+  private async handleDiscoveredTag(tag: any): Promise<void> {
+    const tagId = tag?.id;
+    console.log("[NFC] Tag discovered:", tagId);
+
+    const store = useAppStore.getState();
+
+    // Always mark tag as present
+    store.setTagPresent(true);
+
+    // Check if this is the same tag (already processed)
+    const formattedId = this.formatUID(tagId);
+    if (this.currentTagId === formattedId) {
+      console.log("[NFC] Same tag still present, skipping");
+      return;
+    }
+
+    // Track current tag
+    this.currentTagId = formattedId;
+
+    // Check if processing is enabled (user toggle)
+    if (!store.nfc.processingEnabled) {
+      console.log("[NFC] Processing disabled, ignoring tag data");
+      return;
+    }
+
+    try {
+      const scannedTag = this.processTag(tag);
+
+      if (scannedTag) {
+        // Add to store
+        store.addScannedTag(scannedTag);
+
+        // Send to server if connected
+        if (websocketService.isRegistered()) {
+          websocketService.sendTagScanned({
+            uid: scannedTag.uid,
+            technology: scannedTag.technology,
+            type: scannedTag.type,
+            scannedAt: scannedTag.scannedAt.toISOString(),
+            ndefMessage: scannedTag.ndefMessage,
+          });
+        }
+
+        // Notify callback if set
+        if (this.onTagDiscovered) {
+          this.onTagDiscovered(scannedTag);
+        }
+      }
+    } catch (error) {
+      console.error("[NFC] Error processing discovered tag:", error);
+    }
+  }
+
+  private processTag(tag: any): ScannedTag | null {
+    if (!tag) {
+      console.log("[NFC] No tag data");
       return null;
     }
 
-    try {
-      store.setScanning(true);
+    // Format UID
+    const uid = this.formatUID(tag.id);
 
-      // Request NFC technology
-      await NfcManager.requestTechnology(NfcTech.Ndef);
+    // Determine technology
+    const technology = this.getTechnology(tag);
 
-      // Get the tag
-      const tag = await NfcManager.getTag();
+    // Get tag type
+    const type = this.getTagType(tag);
 
-      if (!tag) {
-        console.log("[NFC] No tag detected");
-        return null;
-      }
+    // Parse NDEF message if available
+    const ndefMessage = this.parseNDEFMessage(tag.ndefMessage);
 
-      // Format UID
-      const uid = this.formatUID(tag.id);
-
-      // Determine technology
-      const technology = this.getTechnology(tag);
-
-      // Get tag type
-      const type = this.getTagType(tag);
-
-      // Parse NDEF message if available
-      const ndefMessage = this.parseNDEFMessage(tag.ndefMessage);
-
-      const scannedTag: ScannedTag = {
-        uid,
-        technology,
-        type,
-        scannedAt: new Date(),
-        ndefMessage,
-        sentToServer: false,
-      };
-
-      // Add to store
-      store.addScannedTag(scannedTag);
-
-      // Send to server if connected
-      if (websocketService.isRegistered()) {
-        websocketService.sendTagScanned({
-          uid: scannedTag.uid,
-          technology: scannedTag.technology,
-          type: scannedTag.type,
-          scannedAt: scannedTag.scannedAt.toISOString(),
-          ndefMessage: scannedTag.ndefMessage,
-        });
-      }
-
-      return scannedTag;
-    } catch (error) {
-      console.error("[NFC] Scan failed:", error);
-      throw error;
-    } finally {
-      store.setScanning(false);
-      await this.cancelScan();
-    }
+    return {
+      uid,
+      technology,
+      type,
+      scannedAt: new Date(),
+      ndefMessage,
+      sentToServer: false,
+    };
   }
 
-  async cancelScan(): Promise<void> {
-    try {
-      await NfcManager.cancelTechnologyRequest();
-    } catch (error) {
-      // Ignore cancellation errors
-    }
-
-    useAppStore.getState().setScanning(false);
+  setTagDiscoveredCallback(callback: ((tag: ScannedTag) => void) | null): void {
+    this.onTagDiscovered = callback;
   }
 
-  // iOS specific: invalidate session with message
-  invalidateSession(message?: string): void {
-    if (Platform.OS === "ios") {
-      // On iOS, the session is automatically invalidated after reading
-      // This is kept for potential future use with custom session handling
-    }
+  isForegroundDispatchActive(): boolean {
+    return this.isForegroundActive;
+  }
+
+  toggleProcessing(): boolean {
+    const store = useAppStore.getState();
+    const newValue = !store.nfc.processingEnabled;
+    store.setProcessingEnabled(newValue);
+    console.log("[NFC] Processing", newValue ? "enabled" : "disabled");
+    return newValue;
+  }
+
+  setProcessingEnabled(enabled: boolean): void {
+    useAppStore.getState().setProcessingEnabled(enabled);
+    console.log("[NFC] Processing", enabled ? "enabled" : "disabled");
+  }
+
+  clearCurrentTag(): void {
+    this.currentTagId = null;
   }
 
   private formatUID(id: string | number[] | undefined): string {

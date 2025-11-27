@@ -9,9 +9,18 @@ import { TagCard } from "@/components/TagCard";
 export default function ScannerScreen() {
   const router = useRouter();
   const { status, serverUrl, isRegistered } = useConnection();
-  const { isSupported, isEnabled, isScanning, lastTag, startScan, initError } = useNFC();
+  const {
+    isSupported,
+    isEnabled,
+    isActive,
+    processingEnabled,
+    tagPresent,
+    lastTag,
+    toggleProcessing,
+    initError
+  } = useNFC();
 
-  const handleScan = async () => {
+  const handleToggleProcessing = () => {
     if (!isSupported) {
       Alert.alert("NFC Not Supported", "This device does not support NFC.");
       return;
@@ -25,18 +34,10 @@ export default function ScannerScreen() {
       return;
     }
 
-    try {
-      await startScan();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to scan tag";
-      // Don't show alert for user cancellation
-      if (!message.includes("cancel")) {
-        Alert.alert("Scan Error", message);
-      }
-    }
+    toggleProcessing();
   };
 
-  const canScan = isSupported && isEnabled && !isScanning;
+  const canToggle = isSupported && isEnabled && isActive;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -54,10 +55,21 @@ export default function ScannerScreen() {
 
       <View style={styles.scanContainer}>
         <ScanButton
-          onPress={handleScan}
-          isScanning={isScanning}
-          disabled={!canScan}
+          onPress={handleToggleProcessing}
+          processingEnabled={processingEnabled}
+          tagPresent={tagPresent}
+          disabled={!canToggle}
         />
+        {isActive && processingEnabled && !tagPresent && (
+          <Text style={styles.activeText}>
+            Hold device near NFC tag
+          </Text>
+        )}
+        {isActive && !processingEnabled && (
+          <Text style={styles.pausedText}>
+            Scanning paused - NFC still captured
+          </Text>
+        )}
         {!isRegistered && status !== "disconnected" && (
           <Text style={styles.warningText}>
             Not registered - tags will be saved locally
@@ -120,8 +132,20 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-  warningText: {
+  activeText: {
     marginTop: 16,
+    fontSize: 14,
+    color: "#10B981",
+    fontWeight: "500",
+  },
+  pausedText: {
+    marginTop: 16,
+    fontSize: 14,
+    color: "#6B7280",
+    fontWeight: "500",
+  },
+  warningText: {
+    marginTop: 8,
     fontSize: 12,
     color: "#F59E0B",
   },

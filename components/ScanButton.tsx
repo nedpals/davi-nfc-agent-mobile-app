@@ -2,42 +2,52 @@ import {
   TouchableOpacity,
   Text,
   StyleSheet,
-  ActivityIndicator,
   View,
 } from "react-native";
 
 interface ScanButtonProps {
   onPress: () => void;
-  isScanning: boolean;
+  processingEnabled: boolean;
+  tagPresent: boolean;
   disabled?: boolean;
 }
 
-export function ScanButton({ onPress, isScanning, disabled }: ScanButtonProps) {
+export function ScanButton({ onPress, processingEnabled, tagPresent, disabled }: ScanButtonProps) {
+  const getButtonStyle = () => {
+    if (disabled) return styles.buttonDisabled;
+    if (tagPresent && processingEnabled) return styles.buttonTagPresent;
+    if (processingEnabled) return styles.buttonActive;
+    return styles.buttonInactive;
+  };
+
+  const getStatusText = () => {
+    if (!processingEnabled) return "Paused";
+    if (tagPresent) return "Tag Detected";
+    return "Ready";
+  };
+
+  const getSubText = () => {
+    if (!processingEnabled) return "Tap to resume scanning";
+    return "Tap to pause scanning";
+  };
+
+  const getIcon = () => {
+    if (tagPresent && processingEnabled) return "✓";
+    if (processingEnabled) return "📡";
+    return "⏸";
+  };
+
   return (
     <TouchableOpacity
-      style={[
-        styles.button,
-        isScanning && styles.buttonScanning,
-        disabled && styles.buttonDisabled,
-      ]}
+      style={[styles.button, getButtonStyle()]}
       onPress={onPress}
-      disabled={disabled || isScanning}
+      disabled={disabled}
       activeOpacity={0.8}
     >
       <View style={styles.content}>
-        {isScanning ? (
-          <>
-            <ActivityIndicator color="#FFFFFF" size="large" />
-            <Text style={styles.text}>Scanning...</Text>
-            <Text style={styles.subText}>Hold device near NFC tag</Text>
-          </>
-        ) : (
-          <>
-            <Text style={styles.icon}>📡</Text>
-            <Text style={styles.text}>Scan NFC Tag</Text>
-            <Text style={styles.subText}>Tap to start scanning</Text>
-          </>
-        )}
+        <Text style={styles.icon}>{getIcon()}</Text>
+        <Text style={styles.text}>{getStatusText()}</Text>
+        <Text style={styles.subText}>{getSubText()}</Text>
       </View>
     </TouchableOpacity>
   );
@@ -57,9 +67,17 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
     elevation: 8,
   },
-  buttonScanning: {
-    backgroundColor: "#F59E0B",
-    shadowColor: "#F59E0B",
+  buttonActive: {
+    backgroundColor: "#10B981",
+    shadowColor: "#10B981",
+  },
+  buttonInactive: {
+    backgroundColor: "#6B7280",
+    shadowColor: "#6B7280",
+  },
+  buttonTagPresent: {
+    backgroundColor: "#3B82F6",
+    shadowColor: "#3B82F6",
   },
   buttonDisabled: {
     backgroundColor: "#9CA3AF",

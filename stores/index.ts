@@ -32,7 +32,9 @@ interface DeviceState {
 interface NFCState {
   isSupported: boolean | null;
   isEnabled: boolean | null;
-  isScanning: boolean;
+  isActive: boolean; // Whether NFC foreground dispatch is active (capturing NFC from OS)
+  processingEnabled: boolean; // Whether to process incoming tags (user toggle)
+  tagPresent: boolean; // Whether a tag is currently on the reader
   lastTag: ScannedTag | null;
   scanHistory: ScannedTag[];
 }
@@ -64,7 +66,9 @@ interface AppStore {
   nfc: NFCState;
   setNFCSupported: (supported: boolean | null) => void;
   setNFCEnabled: (enabled: boolean | null) => void;
-  setScanning: (scanning: boolean) => void;
+  setNFCActive: (active: boolean) => void;
+  setProcessingEnabled: (enabled: boolean) => void;
+  setTagPresent: (present: boolean) => void;
   setLastTag: (tag: ScannedTag | null) => void;
   addScannedTag: (tag: ScannedTag) => void;
   markTagSent: (uid: string) => void;
@@ -109,7 +113,9 @@ const initialDeviceState: DeviceState = {
 const initialNFCState: NFCState = {
   isSupported: null,
   isEnabled: null,
-  isScanning: false,
+  isActive: false,
+  processingEnabled: true, // Process tags by default
+  tagPresent: false,
   lastTag: null,
   scanHistory: [],
 };
@@ -172,9 +178,17 @@ export const useAppStore = create<AppStore>()(
         set((state) => ({
           nfc: { ...state.nfc, isEnabled },
         })),
-      setScanning: (isScanning) =>
+      setNFCActive: (isActive) =>
         set((state) => ({
-          nfc: { ...state.nfc, isScanning },
+          nfc: { ...state.nfc, isActive },
+        })),
+      setProcessingEnabled: (processingEnabled) =>
+        set((state) => ({
+          nfc: { ...state.nfc, processingEnabled },
+        })),
+      setTagPresent: (tagPresent) =>
+        set((state) => ({
+          nfc: { ...state.nfc, tagPresent },
         })),
       setLastTag: (lastTag) =>
         set((state) => ({
@@ -290,11 +304,15 @@ export const useAppStore = create<AppStore>()(
           scanHistory: state.nfc.scanHistory.slice(0, 20), // Persist only last 20
         },
       }),
-      // Ensure platform is always correctly set after rehydration
+      // Ensure correct values after rehydration
       onRehydrateStorage: () => (state) => {
         if (state) {
           state.device.platform = getPlatform();
           state.device.appVersion = APP_VERSION;
+          // Always start with processing enabled
+          state.nfc.processingEnabled = true;
+          state.nfc.isActive = false;
+          state.nfc.tagPresent = false;
         }
       },
     }
