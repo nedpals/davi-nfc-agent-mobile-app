@@ -1,4 +1,5 @@
-import { WS_CONFIG, APP_VERSION, getDeviceMetadata } from "@/constants/config";
+import { Platform } from "react-native";
+import { WS_CONFIG, APP_VERSION, getDeviceMetadata, getDeviceName } from "@/constants/config";
 import { useAppStore } from "@/stores";
 import type {
   BaseMessage,
@@ -112,12 +113,16 @@ class WebSocketService {
     const store = useAppStore.getState();
     const { device } = store;
 
+    // Always compute platform directly to avoid stale/empty values from store
+    const platform: "ios" | "android" = Platform.OS === "ios" ? "ios" : "android";
+    const deviceName = device.deviceName || getDeviceName();
+
     const message: RegisterDeviceMessage = {
       id: this.generateRequestId(),
       type: "registerDevice",
       payload: {
-        deviceName: device.deviceName,
-        platform: device.platform,
+        deviceName,
+        platform,
         appVersion: APP_VERSION,
         capabilities: {
           canRead: true,
@@ -284,6 +289,11 @@ class WebSocketService {
   }
 
   private scheduleReconnect(): void {
+    // Don't schedule if already reconnecting or manually disconnected
+    if (this.reconnectTimeout || this.isManualDisconnect) {
+      return;
+    }
+
     const store = useAppStore.getState();
     store.setConnectionStatus("reconnecting");
 
@@ -304,8 +314,10 @@ class WebSocketService {
     );
 
     this.reconnectTimeout = setTimeout(async () => {
+      this.reconnectTimeout = null;
       this.reconnectAttempts++;
-      if (this.currentUrl) {
+
+      if (this.currentUrl && !this.isManualDisconnect) {
         try {
           // Extract base URL without query params for reconnection
           const baseUrl = this.currentUrl.replace(/\?.*$/, "").replace(/&.*$/, "");
@@ -313,6 +325,14 @@ class WebSocketService {
           await this.registerDevice();
         } catch (error) {
           console.error("[WebSocket] Reconnection failed:", error);
+          // If registration fails, stop reconnecting (likely a config issue)
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          if (errorMsg.includes("Platform") || errorMsg.includes("Invalid")) {
+            console.error("[WebSocket] Registration error - stopping reconnection");
+            store.setConnectionStatus("error");
+            store.setConnectionError(errorMsg);
+            this.reconnectAttempts = WS_CONFIG.RECONNECT.MAX_ATTEMPTS; // Stop retrying
+          }
         }
       }
     }, finalDelay);

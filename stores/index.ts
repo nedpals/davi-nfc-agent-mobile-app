@@ -93,12 +93,15 @@ const initialConnectionState: ConnectionState = {
   serverInfo: null,
 };
 
-const platform = Platform.OS === "ios" ? "ios" : "android";
+// Ensure platform is always 'ios' or 'android'
+const getPlatform = (): "ios" | "android" => {
+  return Platform.OS === "ios" ? "ios" : "android";
+};
 
 const initialDeviceState: DeviceState = {
   deviceId: null,
   deviceName: getDeviceName(),
-  platform,
+  platform: getPlatform(),
   appVersion: APP_VERSION,
   isRegistered: false,
 };
@@ -287,6 +290,13 @@ export const useAppStore = create<AppStore>()(
           scanHistory: state.nfc.scanHistory.slice(0, 20), // Persist only last 20
         },
       }),
+      // Ensure platform is always correctly set after rehydration
+      onRehydrateStorage: () => (state) => {
+        if (state) {
+          state.device.platform = getPlatform();
+          state.device.appVersion = APP_VERSION;
+        }
+      },
     }
   )
 );
