@@ -1,8 +1,8 @@
-import NfcManager, { Ndef, NfcEvents, NfcAdapter } from "react-native-nfc-manager";
-import { Platform, AppState, type AppStateStatus } from "react-native";
 import { useAppStore } from "@/stores";
-import { websocketService } from "./websocket";
 import type { NDEFMessage, NDEFRecord, ScannedTag } from "@/types/protocol";
+import { AppState, type AppStateStatus, Platform } from "react-native";
+import NfcManager, { Ndef, NfcAdapter, NfcEvents } from "react-native-nfc-manager";
+import { websocketService } from "./websocket";
 
 class NFCService {
   private static instance: NFCService;
@@ -305,6 +305,10 @@ class NFCService {
   private getTagType(tag: any): string {
     // Try to determine tag type from various properties
     if (tag.type) {
+      if (tag.type === "com.nxp.ndef.mifareclassic") {
+        return "MIFARE Classic";
+      }
+
       return tag.type;
     }
 
