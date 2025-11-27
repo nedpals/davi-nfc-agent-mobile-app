@@ -9,7 +9,13 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.davi.nfcscanner",
+      "infoPlist": {
+        "NFCReaderUsageDescription": "Scan NFC tags to send to the DAVI server",
+        "NSLocalNetworkUsageDescription": "Discover NFC Agent servers on your local network",
+        "NSBonjourServices": ["_nfc-agent._tcp"]
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -19,7 +25,15 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.davi.nfcscanner",
+      "permissions": [
+        "android.permission.NFC",
+        "android.permission.ACCESS_WIFI_STATE",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.CHANGE_WIFI_MULTICAST_STATE",
+        "android.permission.INTERNET"
+      ]
     },
     "web": {
       "output": "static",
@@ -37,6 +51,14 @@
           "dark": {
             "backgroundColor": "#000000"
           }
+        }
+      ],
+      [
+        "react-native-nfc-manager",
+        {
+          "nfcPermission": "Scan NFC tags to send to the DAVI server",
+          "selectIdentifiers": [],
+          "systemCodes": []
         }
       ]
     ],
