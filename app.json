@@ -27,6 +27,7 @@
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": "com.davi.nfcscanner",
+      "usesCleartextTraffic": true,
       "permissions": [
         "android.permission.NFC",
         "android.permission.ACCESS_WIFI_STATE",
