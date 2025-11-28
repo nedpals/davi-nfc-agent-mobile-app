@@ -14,7 +14,9 @@
       "infoPlist": {
         "NFCReaderUsageDescription": "Scan NFC tags to send to the DAVI server",
         "NSLocalNetworkUsageDescription": "Discover NFC Agent servers on your local network",
-        "NSBonjourServices": ["_nfc-agent._tcp"]
+        "NSBonjourServices": [
+          "_nfc-agent._tcp"
+        ]
       }
     },
     "android": {
@@ -27,7 +29,6 @@
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": "com.davi.nfcscanner",
-      "usesCleartextTraffic": true,
       "permissions": [
         "android.permission.NFC",
         "android.permission.ACCESS_WIFI_STATE",
@@ -60,6 +61,14 @@
           "nfcPermission": "Scan NFC tags to send to the DAVI server",
           "selectIdentifiers": [],
           "systemCodes": []
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
         }
       ]
     ],
