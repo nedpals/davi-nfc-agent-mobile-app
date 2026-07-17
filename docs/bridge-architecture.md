@@ -306,14 +306,94 @@ contract is incomplete without a policy.
 
 ---
 
-## 8. Versioning rules
+## 8. API stability posture (as of agent 1.0.3 + `[Unreleased]`)
 
-- `bridgeVersion` is semver. **Add** a method/field → minor. **Change/remove**
+The whole thesis assumes "point the bridge at any agent and it works." That only
+holds if the agent's API is stable. **It is not yet — it's a fast-moving,
+pre-stable API wearing a `1.0.x` version number** — but it's *well-disciplined*
+churn, and the volatility is distributed in a way that happens to favor this
+architecture. Verdict: build against it **defensively**, don't treat it as frozen.
+
+### 8.1 Evidence the surface is still moving
+
+- **A breaking change sits in `[Unreleased]` today.** The single-port
+  consolidation (device 9470 / client 9471 → one listener, `?mode=device` vs
+  `/ws`) **removed the `-client-port` flag** and changed the connection model.
+  These are the two most recent commits on the agent. The "how do I reach the
+  agent" contract just moved, and was handled as routine rather than as a major
+  version bump.
+- **No git tags exist.** Releases live only as `CHANGELOG` entries and
+  `chore(release): cut 1.0.3` commits. There is **nothing for a third party to
+  pin to** — a practical blocker for an ecosystem, not just a smell.
+- **The entire write / capability / lock / erase surface is new in 1.0.3**, and
+  large parts are explicitly provisional: password protection *"planned… subject
+  to change until enabled"*; destructive NTAG writes *"intentionally gated off
+  pending validation on real hardware"*; Type 4A *"experimental"*; DESFire frame
+  sizing *"wants a hardware cross-check."*
+- **The routed-write path this doc's Option B2 needs is unbuilt** —
+  `deviceWriteRequest` / `deviceWriteResponse` are still *"future feature"* in
+  `protocol/device.go` and are **not routed by the server**.
+- **The importable contract is already out of sync with the wire.**
+  `protocol/websocket.go` is explicitly *"designed to be importable without
+  pulling in server dependencies"* (i.e. the artifact external tools code
+  against), yet the real `tagData` is assembled from a `map[string]any` in
+  `clientserver/server.go` (`"capabilities": data.Card.Capabilities()`) and the
+  `protocol.TagDataPayload` struct **has no `capabilities` field at all.**
+- **They already fight version skew in their own repo:** `fix(test-client):
+  degrade write-result panel gracefully on older agents`.
+
+### 8.2 Evidence it's disciplined, not chaotic
+
+- Keep-a-Changelog + stated SemVer intent, actively maintained; docs kept aligned.
+- A versioned REST namespace already exists (`/api/v1/health`).
+- **A real negotiation seam exists:** device registration returns
+  `serverInfo.version` + `supportedNFC`, and the client API supports
+  `capabilitiesRequest` — so a client can *feature-detect* instead of assuming.
+- Strong test culture (fuzzing, emulator harness, `-race`, tiered suites).
+
+### 8.3 Why the churn lines up with the thin-client model
+
+Volatility is **unevenly distributed**, and the split is favorable:
+
+- **The device/read path is the oldest, most stable part**
+  (`registerDevice` / `tagScanned` / `tagRemoved` / `heartbeat`). That is exactly
+  what the native shell depends on (§4). The safe layer is the load-bearing layer.
+- **The client/UI path is where all the churn is** — but that path **ships from
+  the same agent that defines it.** A server-hosted UI and the server protocol
+  version *in lockstep, always mutually compatible.* This is a genuine argument
+  *for* the webview model: it dissolves version skew for the UI, because the UI is
+  never older or newer than its agent. Skew only bites the layers that **don't**
+  ship from the agent — the native bridge contract and device registration — which
+  is precisely what §8.4 freezes.
+
+### 8.4 Rules that follow from this
+
+- **Don't build against the importable `protocol` Go package** — it's stale (§8.1).
+  Build against the live wire + `docs/api.md`, and gate behavior on
+  `serverInfo.version` + `capabilitiesRequest`, **never on assumptions.**
+- **Near term, prefer B1 (native write) over B2 (routed `deviceWriteRequest`)** —
+  B2's server path does not exist yet (§6.6). B2 is an upstream contribution to
+  make, not a dependency to take today.
+- **Treat "how to reach the agent" as configuration, not a constant.** The
+  unreleased single-port change helps the bridge (one URL) but proves the
+  connection model itself is still in motion; keep it in `services/discovery.ts` /
+  config, not hardcoded.
+- **`bridgeVersion` is semver.** **Add** a method/field → minor. **Change/remove**
   semantics → major. UIs pin a **minimum** bridge version and feature-detect the
   rest from `bridge.hello.methods`.
-- The **device WS protocol stays frozen** — it's what makes old bridges keep
-  working with new agents. Evolve capability through the client API and the bridge
-  contract, not by mutating the device handshake.
+- **Freeze the device WS protocol and the bridge contract** — the two layers that
+  don't ship from the agent. They're what let an old bridge keep working with a new
+  agent. Evolve capability through the client API (which rides along with the UI),
+  not by mutating the device handshake.
+
+### 8.5 The open question that isn't code
+
+The single biggest gap for a third-party ecosystem is not technical: **the
+maintainer needs to commit to tagged releases and an explicit API-stability
+statement.** Today "point your bridge at any agent" has no version to pin against.
+Resolve this — intended freeze point, tagging cadence, what counts as a breaking
+change — before onboarding external partners. It's a people/governance decision,
+not an implementation one.
 
 ---
 
