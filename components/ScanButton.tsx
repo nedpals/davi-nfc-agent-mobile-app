@@ -97,10 +97,12 @@ export function ScanButton({
   const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "360deg"] });
 
   const statusText = disabled ? "NFC unavailable" : processingEnabled ? "Scanning" : "Paused";
+  // While scanning, what to do with a tag is more use than an invitation to
+  // pause something the big button already invites.
   const hintText = disabled
     ? (disabledReason ?? "Turn on NFC to scan")
     : processingEnabled
-      ? "Tap to pause"
+      ? "Hold a tag to the back of the phone"
       : "Tap to resume";
 
   return (

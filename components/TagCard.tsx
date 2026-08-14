@@ -1,7 +1,15 @@
 import { StyleSheet, Text, View } from "react-native";
+import { TagStatusBadge } from "./TagStatusBadge";
 import { colors, fontFamily, radius, shadows, spacing, typography } from "@/constants/theme";
-import { formatTimeAgo } from "@/utils/format";
-import type { ScannedTag } from "@/types/protocol";
+import { base64ByteLength, formatTimeAgo } from "@/utils/format";
+import type { NDEFRecord, ScannedTag } from "@/types/protocol";
+
+function describeRecord(record: NDEFRecord): string {
+  const kind = record.recordType ?? `TNF ${record.tnf}`;
+  const bytes = base64ByteLength(record.payload);
+
+  return bytes ? `${kind} · ${bytes} bytes, not text` : `${kind} · empty`;
+}
 
 interface TagCardProps {
   tag: ScannedTag;
@@ -16,16 +24,7 @@ export function TagCard({ tag }: TagCardProps) {
         <Text style={styles.uid} numberOfLines={1}>
           {tag.uid}
         </Text>
-        <View style={[styles.badge, tag.sentToServer ? styles.badgeSent : styles.badgeLocal]}>
-          <Text
-            style={[
-              styles.badgeText,
-              tag.sentToServer ? styles.badgeTextSent : styles.badgeTextLocal,
-            ]}
-          >
-            {tag.sentToServer ? "Sent" : "Local"}
-          </Text>
-        </View>
+        <TagStatusBadge sent={tag.sentToServer} />
       </View>
 
       <View style={styles.meta}>
@@ -45,9 +44,7 @@ export function TagCard({ tag }: TagCardProps) {
                   {record.content}
                 </Text>
               ) : (
-                <Text style={styles.recordRaw}>
-                  {record.recordType ?? `TNF ${record.tnf}`} · {record.payload.length} bytes encoded
-                </Text>
+                <Text style={styles.recordRaw}>{describeRecord(record)}</Text>
               )}
             </View>
           ))}
@@ -76,27 +73,6 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: colors.brand,
     fontFamily: fontFamily.mono,
-  },
-  badge: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    borderRadius: radius.sm,
-  },
-  badgeSent: {
-    backgroundColor: colors.successSoft,
-  },
-  badgeLocal: {
-    backgroundColor: colors.warningSoft,
-  },
-  badgeText: {
-    fontSize: 12,
-    fontWeight: "600",
-  },
-  badgeTextSent: {
-    color: colors.successText,
-  },
-  badgeTextLocal: {
-    color: colors.warningText,
   },
   meta: {
     flexDirection: "row",

@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { EmptyState } from "@/components/EmptyState";
+import { ModalHeader } from "@/components/ModalHeader";
 import { colors, fontFamily, radius, shadows, spacing, typography } from "@/constants/theme";
 import { useConnection, useServerDiscovery } from "@/hooks";
 import { preferredAddress } from "@/services/discovery";
@@ -81,17 +82,12 @@ export default function ServerListScreen() {
 
   return (
     <SafeAreaView style={styles.screen}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} accessibilityRole="button" hitSlop={8}>
-          <Text style={styles.action}>Close</Text>
-        </TouchableOpacity>
-
-        <Text style={styles.title}>Agents nearby</Text>
-
-        <TouchableOpacity onPress={refresh} accessibilityRole="button" hitSlop={8}>
-          <Text style={styles.action}>Refresh</Text>
-        </TouchableOpacity>
-      </View>
+      <ModalHeader
+        title="Agents nearby"
+        onClose={() => router.back()}
+        actionLabel="Refresh"
+        onAction={refresh}
+      />
 
       {isSearching && (
         <View style={styles.banner}>
@@ -138,23 +134,6 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: colors.background,
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.lg,
-  },
-  title: {
-    ...typography.bodyStrong,
-    fontSize: 17,
-    color: colors.text,
-  },
-  action: {
-    ...typography.body,
-    color: colors.accentDeep,
-    fontWeight: "600",
   },
   banner: {
     flexDirection: "row",

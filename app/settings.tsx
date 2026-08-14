@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   KeyboardAvoidingView,
@@ -14,7 +14,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Button } from "@/components/Button";
-import { InfoRow, Section } from "@/components/Section";
+import { InfoRow, InfoRows, Section } from "@/components/Section";
 import { colors, radius, spacing, typography } from "@/constants/theme";
 import { useConnection, usePairing } from "@/hooks";
 import { hostFromAgentUrl } from "@/services/agent-url";
@@ -55,7 +55,15 @@ export default function SettingsScreen() {
   const [secretInput, setSecretInput] = useState(apiSecret ?? "");
   const [pinInput, setPinInput] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
+  const [nameSaved, setNameSaved] = useState(false);
   const urlEdited = useRef(false);
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (savedTimer.current) {
+      clearTimeout(savedTimer.current);
+    }
+  }, []);
 
   // Discovery can settle on an address while this screen is open, and showing
   // the stale one would have the user connect somewhere else entirely.
@@ -65,16 +73,17 @@ export default function SettingsScreen() {
     }
   }, [serverUrl]);
 
-  const handleSaveName = () => {
-    const name = nameInput.trim();
-    if (!name) {
-      Alert.alert("Name required", "Give this device a name the agent can show.");
-      return;
-    }
+  // Renaming is a small edit, and a modal alert to confirm one is a bigger
+  // interruption than the change deserves.
+  const handleSaveName = useCallback(() => {
+    setDeviceName(nameInput.trim());
+    setNameSaved(true);
 
-    setDeviceName(name);
-    Alert.alert("Saved", "The new name is sent the next time this device registers.");
-  };
+    if (savedTimer.current) {
+      clearTimeout(savedTimer.current);
+    }
+    savedTimer.current = setTimeout(() => setNameSaved(false), 2000);
+  }, [nameInput, setDeviceName]);
 
   const handleConnect = async () => {
     const url = urlInput.trim();
@@ -147,6 +156,8 @@ export default function SettingsScreen() {
   };
 
   const pinning = pinningLabel[pinningState];
+  // Nothing to save until the name is both different and usable.
+  const nameChanged = nameInput.trim().length > 0 && nameInput.trim() !== deviceName;
 
   return (
     <SafeAreaView style={styles.screen} edges={["top", "left", "right"]}>
@@ -158,7 +169,7 @@ export default function SettingsScreen() {
           accessibilityLabel="Back"
           hitSlop={8}
         >
-          <Ionicons name="chevron-back" size={22} color={colors.brand} />
+          <Ionicons name="chevron-back" size={22} color={colors.link} />
         </TouchableOpacity>
         <Text style={styles.title}>Settings</Text>
       </View>
@@ -172,16 +183,33 @@ export default function SettingsScreen() {
           contentContainerStyle={styles.content}
           keyboardShouldPersistTaps="handled"
         >
-          <Section title="Device name" footer="Shown by the agent to identify this reader.">
+          <Section
+            title="Device name"
+            footer={
+              nameSaved
+                ? "Saved — the agent sees it the next time this device registers."
+                : "Shown by the agent to identify this reader."
+            }
+          >
             <View style={styles.row}>
               <TextInput
                 style={styles.input}
                 value={nameInput}
-                onChangeText={setNameInput}
+                onChangeText={(value) => {
+                  setNameInput(value);
+                  setNameSaved(false);
+                }}
                 placeholder="Kiosk phone"
                 placeholderTextColor={colors.textFaint}
+                returnKeyType="done"
+                onSubmitEditing={handleSaveName}
               />
-              <Button label="Save" onPress={handleSaveName} style={styles.inlineButton} />
+              <Button
+                label="Save"
+                onPress={handleSaveName}
+                disabled={!nameChanged}
+                style={styles.inlineButton}
+              />
             </View>
           </Section>
 
@@ -238,14 +266,18 @@ export default function SettingsScreen() {
               title="Pairing"
               footer="Each device's credential is revoked on its own from the agent's tray."
             >
-              <InfoRow label="Agent" value={pairing.host} />
-              <InfoRow label="Device ID" value={truncateMiddle(pairing.deviceID)} mono />
-              <InfoRow
-                label="Agent key pin"
-                value={pairing.publicKeyPin ? truncateMiddle(pairing.publicKeyPin, 10) : "None — no TLS"}
-                mono
-              />
-              <InfoRow label="Pin" value={pinning.text} tone={pinning.tone} last />
+              <InfoRows>
+                <InfoRow label="Agent" value={pairing.host} />
+                <InfoRow label="Device ID" value={truncateMiddle(pairing.deviceID)} mono />
+                <InfoRow
+                  label="Agent key pin"
+                  value={
+                    pairing.publicKeyPin ? truncateMiddle(pairing.publicKeyPin, 10) : "None — no TLS"
+                  }
+                  mono
+                />
+                <InfoRow label="Pin" value={pinning.text} tone={pinning.tone} />
+              </InfoRows>
               <Button
                 label="Unpair"
                 variant="danger"
@@ -277,22 +309,22 @@ export default function SettingsScreen() {
           )}
 
           <Section title="This device">
-            <InfoRow label="Registered ID" value={deviceId ?? "Not registered"} mono />
-            <InfoRow label="Platform" value={device.platform === "ios" ? "iOS" : "Android"} />
-            <InfoRow label="App version" value={device.appVersion} />
-            <InfoRow label="Status" value={status} />
-            <InfoRow label="Last connected" value={formatDateTime(lastConnected)} last />
+            <InfoRows>
+              <InfoRow label="Registered ID" value={deviceId ?? "Not registered"} mono />
+              <InfoRow label="Platform" value={device.platform === "ios" ? "iOS" : "Android"} />
+              <InfoRow label="App version" value={device.appVersion} />
+              <InfoRow label="Status" value={status} />
+              <InfoRow label="Last connected" value={formatDateTime(lastConnected)} />
+            </InfoRows>
           </Section>
 
           {serverInfo && (
             <Section title="Agent details">
-              <InfoRow label="Version" value={serverInfo.version} />
-              <InfoRow label="Protocol" value={`v${protocolVersion}`} />
-              <InfoRow
-                label="Supported NFC"
-                value={serverInfo.supportedNFC.join(", ") || "—"}
-                last
-              />
+              <InfoRows>
+                <InfoRow label="Version" value={serverInfo.version} />
+                <InfoRow label="Protocol" value={`v${protocolVersion}`} />
+                <InfoRow label="Supported NFC" value={serverInfo.supportedNFC.join(", ") || "—"} />
+              </InfoRows>
             </Section>
           )}
         </ScrollView>

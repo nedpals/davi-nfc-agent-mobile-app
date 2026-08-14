@@ -12,6 +12,8 @@ interface ConnectionStatusProps {
   isSearching?: boolean;
   isOnline?: boolean;
   onPress?: () => void;
+  // Offered when the connection has given up and there is something to try.
+  onRetry?: () => void;
 }
 
 const statusColor: Record<ConnectionStatusType, string> = {
@@ -32,6 +34,7 @@ export function ConnectionStatus({
   isSearching,
   isOnline = true,
   onPress,
+  onRetry,
 }: ConnectionStatusProps) {
   const color = statusColor[status] ?? statusColor.disconnected;
   const busy = status === "connecting" || status === "reconnecting" || !!isSearching;
@@ -100,7 +103,18 @@ export function ConnectionStatus({
         ) : null}
       </View>
 
-      {onPress ? <Text style={styles.chevron}>›</Text> : null}
+      {onRetry ? (
+        <TouchableOpacity
+          onPress={onRetry}
+          accessibilityRole="button"
+          accessibilityLabel="Try connecting again"
+          hitSlop={12}
+        >
+          <Text style={styles.retry}>Try again</Text>
+        </TouchableOpacity>
+      ) : onPress ? (
+        <Text style={styles.chevron}>›</Text>
+      ) : null}
     </TouchableOpacity>
   );
 }
@@ -134,6 +148,12 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textMuted,
     marginTop: 2,
+  },
+  retry: {
+    ...typography.label,
+    color: colors.link,
+    fontWeight: "700",
+    marginLeft: spacing.sm,
   },
   chevron: {
     fontSize: 22,

@@ -74,6 +74,16 @@ describe("scanner screen", () => {
     );
   });
 
+  it("offers a way back once the connection has given up", async () => {
+    render(<ScannerScreen />);
+    update(() => {
+      useAppStore.getState().setServerUrl("192.168.1.5:9470");
+      useAppStore.getState().failConnection("Could not reach the agent");
+    });
+
+    await waitFor(() => expect(screen.getByLabelText("Try connecting again")).toBeTruthy());
+  });
+
   it("names the agent it is registered with", async () => {
     render(<ScannerScreen />);
     update(() => {

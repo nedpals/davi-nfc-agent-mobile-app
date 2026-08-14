@@ -1,21 +1,42 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import { useCallback } from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { ConnectionStatus } from "@/components/ConnectionStatus";
 import { Notice } from "@/components/Notice";
 import { ScanButton } from "@/components/ScanButton";
-import { TagDrawer } from "@/components/TagDrawer";
+import { TAG_DRAWER_HEIGHT, TagDrawer } from "@/components/TagDrawer";
 import { colors, radius, shadows, spacing, typography } from "@/constants/theme";
 import { useAutoConnect, useConnection, useNFC, usePairing } from "@/hooks";
 
-// Keeps the scan button clear of the tag drawer that floats over the bottom.
-const DRAWER_CLEARANCE = 96;
+/**
+ * What the reader is doing, as one answer rather than four overlapping
+ * booleans. Everything the screen says about NFC is keyed off this.
+ */
+type ReaderState = "unsupported" | "off" | "failed" | "starting" | "stalled" | "ready";
+
+const READER_HINT: Record<ReaderState, string> = {
+  unsupported: "This device has no NFC reader",
+  off: "Turn on NFC to scan",
+  failed: "The reader could not be started",
+  starting: "Starting the reader…",
+  stalled: "The reader is not running",
+  ready: "",
+};
 
 export default function ScannerScreen() {
   const router = useRouter();
-  const { status, serverUrl, deviceName, isRegistered, error, reconnectAttempt } = useConnection();
-  const { isSearching, isOnline } = useAutoConnect();
+  const {
+    status,
+    serverUrl,
+    deviceName,
+    isRegistered,
+    error,
+    reconnectAttempt,
+    retry: retryConnection,
+  } = useConnection();
+  const { isSearching, isOnline, retry: retryDiscovery } = useAutoConnect();
   // Reads the stored credential once at start, so pairing and pin enforcement
   // are known before anything is dialled.
   usePairing();
@@ -24,6 +45,7 @@ export default function ScannerScreen() {
     isSupported,
     isEnabled,
     isActive,
+    isInitialized,
     processingEnabled,
     lastTag,
     scanHistory,
@@ -34,16 +56,29 @@ export default function ScannerScreen() {
     canOpenSystemSettings,
   } = useNFC();
 
-  const nfcUnsupported = isSupported === false;
-  const nfcOff = isSupported === true && isEnabled === false;
-  const readerStalled = isSupported === true && isEnabled === true && !isActive;
-  const canScan = !nfcUnsupported && !nfcOff && isActive;
+  const readerState: ReaderState = initError
+    ? "failed"
+    : isSupported === false
+      ? "unsupported"
+      : isEnabled === false
+        ? "off"
+        : isActive
+          ? "ready"
+          : // Before initialisation finishes there is nothing wrong to report;
+            // after it, a reader that is still not running is worth saying.
+            isInitialized
+            ? "stalled"
+            : "starting";
 
-  const disabledReason = nfcUnsupported
-    ? "This device has no NFC reader"
-    : nfcOff
-      ? "Turn on NFC to scan"
-      : "Starting the reader…";
+  const handleRetry = useCallback(() => {
+    // A known address is worth dialling again directly; without one, finding
+    // an agent is the only way back.
+    if (serverUrl) {
+      retryConnection().catch(() => {});
+    } else {
+      retryDiscovery();
+    }
+  }, [serverUrl, retryConnection, retryDiscovery]);
 
   return (
     <SafeAreaView style={styles.screen} edges={["top", "left", "right"]}>
@@ -58,7 +93,7 @@ export default function ScannerScreen() {
             style={styles.iconButton}
             onPress={() => router.push("/(modals)/history")}
             accessibilityRole="button"
-            accessibilityLabel="Scan history"
+            accessibilityLabel={`Scan history, ${scanHistory.length} kept`}
           >
             <Ionicons name="time-outline" size={20} color={colors.brand} />
             {scanHistory.length > 0 && (
@@ -90,19 +125,17 @@ export default function ScannerScreen() {
         isSearching={isSearching}
         isOnline={isOnline}
         onPress={() => router.push("/(modals)/server-list")}
+        onRetry={status === "error" && isOnline ? handleRetry : undefined}
       />
 
       <View style={styles.notices}>
-        {initError && <Notice tone="danger" message={initError} />}
+        {readerState === "failed" && <Notice tone="danger" message={initError!} />}
 
-        {nfcUnsupported && (
-          <Notice
-            tone="danger"
-            message="This device has no NFC reader, so it cannot scan tags."
-          />
+        {readerState === "unsupported" && (
+          <Notice tone="danger" message="This device has no NFC reader, so it cannot scan tags." />
         )}
 
-        {nfcOff && (
+        {readerState === "off" && (
           <Notice
             tone="warning"
             message="NFC is switched off in system settings."
@@ -111,11 +144,11 @@ export default function ScannerScreen() {
           />
         )}
 
-        {!nfcUnsupported && !nfcOff && readerStalled && !initError && (
-          <Notice tone="muted" message="Starting the NFC reader…" />
+        {readerState === "stalled" && (
+          <Notice tone="muted" message="The NFC reader is not running." />
         )}
 
-        {canScan && !isRegistered && status !== "disconnected" && (
+        {readerState === "ready" && !isRegistered && status !== "disconnected" && (
           <Notice tone="warning" message="Not registered yet — scans are kept on this device." />
         )}
       </View>
@@ -124,13 +157,9 @@ export default function ScannerScreen() {
         <ScanButton
           onPress={toggleProcessing}
           processingEnabled={processingEnabled}
-          disabled={!canScan}
-          disabledReason={disabledReason}
+          disabled={readerState !== "ready"}
+          disabledReason={READER_HINT[readerState]}
         />
-
-        {canScan && processingEnabled && (
-          <Text style={styles.prompt}>Hold a tag against the back of the phone</Text>
-        )}
       </View>
 
       <TagDrawer
@@ -203,11 +232,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    paddingBottom: DRAWER_CLEARANCE,
-  },
-  prompt: {
-    marginTop: spacing.lg,
-    ...typography.caption,
-    color: colors.textMuted,
+    // Keeps the button clear of the drawer that floats over the bottom.
+    paddingBottom: TAG_DRAWER_HEIGHT + spacing.xxl,
   },
 });

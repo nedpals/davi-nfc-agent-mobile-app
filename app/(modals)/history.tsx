@@ -1,7 +1,8 @@
 import { useRouter } from "expo-router";
-import { Alert, FlatList, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Alert, FlatList, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { EmptyState } from "@/components/EmptyState";
+import { ModalHeader } from "@/components/ModalHeader";
 import { TagCard } from "@/components/TagCard";
 import { PERSISTED_HISTORY_LIMIT } from "@/constants/config";
 import { colors, spacing, typography } from "@/constants/theme";
@@ -20,28 +21,17 @@ export default function HistoryScreen() {
 
   return (
     <SafeAreaView style={styles.screen}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} accessibilityRole="button" hitSlop={8}>
-          <Text style={styles.action}>Close</Text>
-        </TouchableOpacity>
-
-        <Text style={styles.title}>Scan history</Text>
-
-        <TouchableOpacity
-          onPress={handleClear}
-          disabled={scanHistory.length === 0}
-          accessibilityRole="button"
-          hitSlop={8}
-        >
-          <Text style={[styles.action, scanHistory.length === 0 && styles.actionDisabled]}>
-            Clear
-          </Text>
-        </TouchableOpacity>
-      </View>
+      <ModalHeader
+        title="Scan history"
+        onClose={() => router.back()}
+        actionLabel="Clear"
+        onAction={handleClear}
+        actionDisabled={scanHistory.length === 0}
+      />
 
       <FlatList
         data={scanHistory}
-        keyExtractor={(tag, index) => `${tag.uid}-${tag.scannedAt.getTime()}-${index}`}
+        keyExtractor={(tag) => `${tag.uid}-${tag.scannedAt.getTime()}`}
         renderItem={({ item }) => <TagCard tag={item} />}
         contentContainerStyle={[styles.list, scanHistory.length === 0 && styles.listEmpty]}
         ItemSeparatorComponent={() => <View style={styles.separator} />}
@@ -66,26 +56,6 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: colors.background,
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.lg,
-  },
-  title: {
-    ...typography.bodyStrong,
-    fontSize: 17,
-    color: colors.text,
-  },
-  action: {
-    ...typography.body,
-    color: colors.accentDeep,
-    fontWeight: "600",
-  },
-  actionDisabled: {
-    color: colors.disabled,
   },
   list: {
     paddingHorizontal: spacing.lg,

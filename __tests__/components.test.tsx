@@ -36,6 +36,14 @@ describe("ConnectionStatus", () => {
     expect(screen.getByText("No network")).toBeTruthy();
   });
 
+  it("offers a way back when the connection has given up", () => {
+    const onRetry = jest.fn();
+    render(<ConnectionStatus status="error" error="Could not reach the agent" onRetry={onRetry} />);
+
+    fireEvent.press(screen.getByLabelText("Try connecting again"));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
   it("is only pressable when it has somewhere to go", () => {
     const onPress = jest.fn();
     render(<ConnectionStatus status="disconnected" onPress={onPress} />);
@@ -51,7 +59,7 @@ describe("ScanButton", () => {
     render(<ScanButton onPress={onPress} processingEnabled />);
 
     expect(screen.getByText("Scanning")).toBeTruthy();
-    fireEvent.press(screen.getByText("Tap to pause"));
+    fireEvent.press(screen.getByText("Hold a tag to the back of the phone"));
     expect(onPress).toHaveBeenCalled();
   });
 

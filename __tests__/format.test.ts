@@ -1,4 +1,10 @@
-import { formatDateTime, formatTimeAgo, toDate, truncateMiddle } from "@/utils/format";
+import {
+  base64ByteLength,
+  formatDateTime,
+  formatTimeAgo,
+  toDate,
+  truncateMiddle,
+} from "@/utils/format";
 
 describe("formatTimeAgo", () => {
   const now = new Date("2026-01-01T12:00:00Z");
@@ -53,5 +59,22 @@ describe("truncateMiddle", () => {
 
   it("keeps both ends of a long value", () => {
     expect(truncateMiddle("0123456789abcdefghij", 4)).toBe("0123…ghij");
+  });
+});
+
+describe("base64ByteLength", () => {
+  it.each([
+    ["", 0],
+    ["AQ==", 1],
+    ["AQI=", 2],
+    ["AQID", 3],
+    ["aGVsbG8=", 5],
+  ])("reads %s as %i bytes", (value, expected) => {
+    expect(base64ByteLength(value)).toBe(expected);
+  });
+
+  it("does not report the string's own length, which is a third too many", () => {
+    // "AQID" is four characters standing for three bytes.
+    expect(base64ByteLength("AQID")).not.toBe("AQID".length);
   });
 });

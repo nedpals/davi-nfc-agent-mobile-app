@@ -2,10 +2,13 @@ import { Platform, type TextStyle, type ViewStyle } from "react-native";
 
 export const colors = {
   brand: "#1F4E5F",
-  brandMuted: "#37697C",
   accent: "#00A4E4",
   accentDeep: "#0077B3",
   accentSoft: "#E6F4FE",
+
+  // Text that can be tapped — back, close, refresh. Solid buttons and the
+  // wordmark use `brand`; this is the one colour that means "this is a link".
+  link: "#0077B3",
 
   background: "#F8FAFB",
   surface: "#FFFFFF",
@@ -49,7 +52,6 @@ export const radius = {
   sm: 8,
   md: 12,
   lg: 16,
-  xl: 20,
   pill: 999,
 } as const;
 
@@ -87,5 +89,3 @@ export const shadows = {
     elevation: 8,
   },
 } satisfies Record<string, ViewStyle>;
-
-export const theme = { colors, spacing, radius, typography, shadows, fontFamily };

@@ -1,5 +1,5 @@
+import { Children, Fragment, type ReactNode } from "react";
 import { StyleSheet, Text, View } from "react-native";
-import type { ReactNode } from "react";
 import { colors, fontFamily, radius, shadows, spacing, typography } from "@/constants/theme";
 
 interface SectionProps {
@@ -18,12 +18,31 @@ export function Section({ title, footer, children }: SectionProps) {
   );
 }
 
+/**
+ * Rules between rows, drawn between them rather than under each one — so a row
+ * added at the end cannot leave a line hanging above nothing, and no row has to
+ * know whether it is the last.
+ */
+export function InfoRows({ children }: { children: ReactNode }) {
+  const rows = Children.toArray(children);
+
+  return (
+    <>
+      {rows.map((row, index) => (
+        <Fragment key={index}>
+          {index > 0 && <View style={styles.separator} />}
+          {row}
+        </Fragment>
+      ))}
+    </>
+  );
+}
+
 interface InfoRowProps {
   label: string;
   value: string;
   mono?: boolean;
   tone?: "default" | "muted" | "success" | "warning" | "danger";
-  last?: boolean;
 }
 
 const toneColor = {
@@ -34,9 +53,9 @@ const toneColor = {
   danger: colors.dangerText,
 } as const;
 
-export function InfoRow({ label, value, mono, tone = "default", last }: InfoRowProps) {
+export function InfoRow({ label, value, mono, tone = "default" }: InfoRowProps) {
   return (
-    <View style={[styles.row, last && styles.rowLast]}>
+    <View style={styles.row}>
       <Text style={styles.rowLabel}>{label}</Text>
       <Text
         style={[styles.rowValue, { color: toneColor[tone] }, mono && styles.rowValueMono]}
@@ -71,18 +90,16 @@ const styles = StyleSheet.create({
     marginHorizontal: spacing.xs,
     lineHeight: 17,
   },
+  separator: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.border,
+  },
   row: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     gap: spacing.md,
     paddingVertical: spacing.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-  },
-  rowLast: {
-    borderBottomWidth: 0,
-    paddingBottom: 0,
   },
   rowLabel: {
     ...typography.label,

@@ -57,6 +57,19 @@ export function formatClockTime(value: Date | string | number): string {
 }
 
 /**
+ * How many bytes a base64 string stands for. Its own length is four characters
+ * per three bytes, so reporting that as a byte count overstates it by a third.
+ */
+export function base64ByteLength(value: string): number {
+  if (!value) {
+    return 0;
+  }
+
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((value.length * 3) / 4) - padding);
+}
+
+/**
  * Shorten a long opaque value so it can be shown without wrapping over several
  * lines. Identifiers and key pins are recognised by their ends, not the middle.
  */

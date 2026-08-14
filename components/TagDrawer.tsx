@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Animated, PanResponder, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Svg, { Path } from "react-native-svg";
+import { TagStatusBadge } from "./TagStatusBadge";
 import { colors, fontFamily, radius, shadows, spacing, typography } from "@/constants/theme";
 import { formatClockTime } from "@/utils/format";
 import type { ScannedTag } from "@/types/protocol";
@@ -12,7 +13,10 @@ interface TagDrawerProps {
   onPress?: () => void;
 }
 
-const HEIGHT = 64;
+// Exported so a screen can keep its own content clear of the drawer instead of
+// guessing at a gap.
+export const TAG_DRAWER_HEIGHT = 64;
+
 const SWIPE_THRESHOLD = 80;
 
 function CloseIcon({ size = 20, color = colors.textFaint }) {
@@ -32,7 +36,7 @@ function CloseIcon({ size = 20, color = colors.textFaint }) {
 export function TagDrawer({ tag, onClear, onPress }: TagDrawerProps) {
   const insets = useSafeAreaInsets();
   const bottomOffset = Math.max(insets.bottom, spacing.lg) + spacing.sm;
-  const hiddenOffset = HEIGHT + bottomOffset + 50;
+  const hiddenOffset = TAG_DRAWER_HEIGHT + bottomOffset + 50;
 
   // The tag is kept after the prop clears so the exit animation has something
   // to play; unmounting on the spot is what made it disappear instantly.
@@ -142,15 +146,8 @@ export function TagDrawer({ tag, onClear, onPress }: TagDrawerProps) {
           </View>
         </View>
 
-        <View style={[styles.badge, shownTag.sentToServer ? styles.badgeSent : styles.badgeLocal]}>
-          <Text
-            style={[
-              styles.badgeText,
-              shownTag.sentToServer ? styles.badgeTextSent : styles.badgeTextLocal,
-            ]}
-          >
-            {shownTag.sentToServer ? "Sent" : "Local"}
-          </Text>
+        <View style={styles.badge}>
+          <TagStatusBadge sent={shownTag.sentToServer} />
         </View>
       </TouchableOpacity>
 
@@ -210,26 +207,7 @@ const styles = StyleSheet.create({
     color: colors.disabled,
   },
   badge: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    borderRadius: radius.sm,
     marginLeft: spacing.sm,
-  },
-  badgeSent: {
-    backgroundColor: colors.successSoft,
-  },
-  badgeLocal: {
-    backgroundColor: colors.warningSoft,
-  },
-  badgeText: {
-    fontSize: 12,
-    fontWeight: "600",
-  },
-  badgeTextSent: {
-    color: colors.successText,
-  },
-  badgeTextLocal: {
-    color: colors.warningText,
   },
   close: {
     padding: spacing.xs,
