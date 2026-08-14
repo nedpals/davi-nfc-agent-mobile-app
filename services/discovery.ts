@@ -1,5 +1,6 @@
 import { useAppStore } from "@/stores";
-import { DISCOVERY_CONFIG } from "@/constants/config";
+import { DISCOVERY_CONFIG, WS_CONFIG } from "@/constants/config";
+import { buildDeviceUrl } from "@/services/agent-url";
 import type { DiscoveredServer } from "@/types/protocol";
 
 class DiscoveryService {
@@ -147,10 +148,15 @@ class DiscoveryService {
   // Build WebSocket URL from discovered server
   buildWebSocketUrl(server: DiscoveredServer): string {
     const host = server.addresses[0] || server.host;
-    const port = server.port;
-    const path = server.txtRecords.path || "/ws";
+    const { tls, device_path, path } = server.txtRecords;
+    const endpoint = device_path || path || WS_CONFIG.DEFAULT_PATH;
 
-    return `ws://${host}:${port}${path}`;
+    // An agent that advertises no tls record predates it. Leaving tls
+    // undefined lets the URL builder assume TLS, which is what such an agent
+    // serves unless it was started with -auto-tls=false.
+    return buildDeviceUrl(`${host}:${server.port}${endpoint}`, {
+      tls: tls === undefined ? undefined : tls !== "false",
+    });
   }
 }
 

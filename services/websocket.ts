@@ -1,5 +1,6 @@
 import { Platform } from "react-native";
 import { WS_CONFIG, APP_VERSION, getDeviceMetadata, getDeviceName } from "@/constants/config";
+import { buildDeviceUrl } from "@/services/agent-url";
 import { useAppStore } from "@/stores";
 import type {
   BaseMessage,
@@ -42,14 +43,11 @@ class WebSocketService {
     this.disconnect();
     this.isManualDisconnect = false;
 
-    // Build WebSocket URL
-    const wsUrl = serverUrl.includes("?")
-      ? `${serverUrl}&mode=device`
-      : `${serverUrl}?mode=device`;
-
-    this.currentUrl = wsUrl;
-
     const store = useAppStore.getState();
+    const wsUrl = buildDeviceUrl(serverUrl);
+
+    this.currentUrl = serverUrl;
+
     store.setServerUrl(serverUrl);
     store.setConnectionStatus("connecting");
     store.setConnectionError(null);
@@ -59,7 +57,7 @@ class WebSocketService {
         this.ws = new WebSocket(wsUrl);
 
         this.ws.onopen = () => {
-          console.log("[WebSocket] Connected to", wsUrl);
+          console.log("[WebSocket] Connected to", serverUrl);
           this.reconnectAttempts = 0;
           useAppStore.getState().setConnectionStatus("connected");
           resolve();
@@ -71,7 +69,13 @@ class WebSocketService {
 
         this.ws.onerror = (error) => {
           console.error("[WebSocket] Error:", error);
-          useAppStore.getState().setConnectionError("WebSocket connection error");
+          // The agent rejects a bad or missing API secret before the upgrade,
+          // so auth failure arrives here as a handshake error rather than as a
+          // close frame or an error message on the socket.
+          const detail = (error as { message?: string } | undefined)?.message;
+          useAppStore
+            .getState()
+            .setConnectionError(detail || "WebSocket connection error");
         };
 
         this.ws.onclose = (event) => {
@@ -342,9 +346,7 @@ class WebSocketService {
 
       if (this.currentUrl && !this.isManualDisconnect) {
         try {
-          // Extract base URL without query params for reconnection
-          const baseUrl = this.currentUrl.replace(/\?.*$/, "").replace(/&.*$/, "");
-          await this.connect(baseUrl);
+          await this.connect(this.currentUrl);
           await this.registerDevice();
         } catch (error) {
           console.error("[WebSocket] Reconnection failed:", error);

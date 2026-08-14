@@ -9,6 +9,13 @@ export const WS_CONFIG = {
   // Default WebSocket path
   DEFAULT_PATH: "/ws",
 
+  // The agent's default port. It serves devices and clients on this one port,
+  // told apart by the mode=device discriminator.
+  DEFAULT_PORT: 9470,
+
+  // The CA bootstrap server, which is separate and always plain HTTP.
+  BOOTSTRAP_PORT: 9472,
+
   // Heartbeat interval in milliseconds (10 seconds per protocol)
   HEARTBEAT_INTERVAL: 10000,
 

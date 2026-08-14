@@ -140,9 +140,15 @@ export interface DiscoveredServer {
   addresses: string[];
   txtRecords: {
     version?: string;
+    // The wire protocol ("websocket"), not the URL scheme — see tls for that.
     protocol?: string;
     path?: string;
-    device_mode?: string;
+    // "true" | "false". Absent on agents before 1.0.4.
+    tls?: string;
+    // The device endpoint with its discriminator, e.g. "/ws?mode=device".
+    // Absent on agents before 1.0.4.
+    device_path?: string;
+    type?: string;
   };
 }
 
