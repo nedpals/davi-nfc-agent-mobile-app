@@ -1,4 +1,5 @@
 import * as Device from "expo-device";
+import { Platform } from "react-native";
 
 // App configuration constants
 
@@ -79,3 +80,31 @@ export const getDeviceMetadata = () => ({
   osVersion: `${Device.osName} ${Device.osVersion}`,
   model: Device.modelId || Device.modelName || "Unknown",
 });
+
+/**
+ * What this device can actually do, which is not the same on both platforms.
+ *
+ * The agent acts on what is declared here, so everything is reported as it is:
+ * the app reads NDEF and nothing else, and CoreNFC cannot reach MIFARE Classic
+ * at all where Android's reader mode can.
+ */
+export const getDeviceCapabilities = () => {
+  const isIOS = Platform.OS === "ios";
+
+  return {
+    canRead: true,
+    // No write path exists in the app yet, so writing is not offered.
+    canWrite: false,
+    nfcType: isIOS ? "corenfc" : "isodep",
+
+    // Neither APDU nor framing-level exchange is implemented.
+    canTransceive: false,
+    canTransceiveRaw: false,
+    canLock: false,
+
+    deviceType: "smartphone",
+    supportedTagTypes: isIOS
+      ? ["NTAG", "MIFARE Ultralight", "ISO-DEP"]
+      : ["NTAG", "MIFARE Ultralight", "MIFARE Classic", "ISO-DEP"],
+  };
+};

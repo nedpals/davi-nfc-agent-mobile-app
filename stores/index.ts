@@ -5,6 +5,7 @@ import { Platform } from "react-native";
 import type {
   ConnectionStatus,
   DiscoveredServer,
+  ProtocolVersion,
   ScannedTag,
   ServerInfo,
 } from "@/types/protocol";
@@ -20,6 +21,12 @@ interface ConnectionState {
   error: string | null;
   lastConnected: Date | null;
   serverInfo: ServerInfo | null;
+  // What the agent agreed to speak: 1 after a hello handshake, 0 against an
+  // agent that predates versioning.
+  protocolVersion: ProtocolVersion;
+  // Set once the device holds its own paired credential, so the UI can stop
+  // asking for the shared secret.
+  isPaired: boolean;
 }
 
 // Device state slice
@@ -55,6 +62,8 @@ interface AppStore {
   setConnectionStatus: (status: ConnectionStatus) => void;
   setServerUrl: (url: string | null) => void;
   setApiSecret: (secret: string | null) => void;
+  setProtocolVersion: (version: ProtocolVersion) => void;
+  setPaired: (paired: boolean) => void;
   setConnectionError: (error: string | null) => void;
   setLastConnected: (date: Date | null) => void;
   setServerInfo: (info: ServerInfo | null) => void;
@@ -98,6 +107,8 @@ const initialConnectionState: ConnectionState = {
   error: null,
   lastConnected: null,
   serverInfo: null,
+  protocolVersion: 0,
+  isPaired: false,
 };
 
 // Ensure platform is always 'ios' or 'android'
@@ -145,6 +156,14 @@ export const useAppStore = create<AppStore>()(
       setApiSecret: (apiSecret) =>
         set((state) => ({
           connection: { ...state.connection, apiSecret },
+        })),
+      setProtocolVersion: (protocolVersion) =>
+        set((state) => ({
+          connection: { ...state.connection, protocolVersion },
+        })),
+      setPaired: (isPaired) =>
+        set((state) => ({
+          connection: { ...state.connection, isPaired },
         })),
       setConnectionError: (error) =>
         set((state) => ({

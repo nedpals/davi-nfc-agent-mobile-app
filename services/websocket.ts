@@ -1,16 +1,28 @@
 import { Platform } from "react-native";
-import { WS_CONFIG, APP_VERSION, getDeviceMetadata, getDeviceName } from "@/constants/config";
+import {
+  WS_CONFIG,
+  APP_VERSION,
+  getDeviceCapabilities,
+  getDeviceMetadata,
+  getDeviceName,
+} from "@/constants/config";
 import { buildDeviceUrl } from "@/services/agent-url";
+import { loadCredential } from "@/services/credentials";
 import { useAppStore } from "@/stores";
-import type {
-  BaseMessage,
-  RegisterDeviceMessage,
-  RegisterDeviceResponse,
-  TagScannedMessage,
-  TagRemovedMessage,
-  DeviceHeartbeatMessage,
-  ErrorMessage,
-  TagScannedPayload,
+import {
+  DEVICE_SUBPROTOCOL_V1,
+  type BaseMessage,
+  type GoodbyeMessage,
+  type HelloMessage,
+  type HelloResponse,
+  type ProtocolVersion,
+  type RegisterDeviceMessage,
+  type RegisterDeviceResponse,
+  type TagScannedMessage,
+  type TagRemovedMessage,
+  type DeviceHeartbeatMessage,
+  type ErrorMessage,
+  type TagScannedPayload,
 } from "@/types/protocol";
 
 interface PendingRequest {
@@ -29,6 +41,12 @@ class WebSocketService {
   private currentUrl: string | null = null;
   private isManualDisconnect = false;
 
+  // What the agent agreed to speak. Set from the registration response rather
+  // than from the subprotocol echo, because the first frame's type is what
+  // actually selects the dialect.
+  private offeredVersion: ProtocolVersion = 0;
+  private negotiatedVersion: ProtocolVersion = 0;
+
   private constructor() {}
 
   static getInstance(): WebSocketService {
@@ -44,12 +62,20 @@ class WebSocketService {
     this.isManualDisconnect = false;
 
     const store = useAppStore.getState();
-    const wsUrl = buildDeviceUrl(serverUrl, { secret: store.connection.apiSecret });
+
+    // A paired device presents its own token; the shared API secret remains the
+    // fallback for an agent that has not been paired with, which the agent
+    // still accepts unless it was started with -require-paired-devices.
+    const credential = await loadCredential();
+    const secret = credential?.deviceToken || store.connection.apiSecret;
+    const wsUrl = buildDeviceUrl(serverUrl, { secret });
 
     // Hold the caller's URL rather than the dialled one: the dialled URL
-    // carries the API secret, and this is what gets persisted and reused on
+    // carries the credential, and this is what gets persisted and reused on
     // reconnect.
     this.currentUrl = serverUrl;
+    this.offeredVersion = 1;
+    this.negotiatedVersion = 0;
 
     store.setServerUrl(serverUrl);
     store.setConnectionStatus("connecting");
@@ -57,10 +83,21 @@ class WebSocketService {
 
     return new Promise((resolve, reject) => {
       try {
-        this.ws = new WebSocket(wsUrl);
+        this.ws = new WebSocket(wsUrl, [DEVICE_SUBPROTOCOL_V1]);
 
         this.ws.onopen = () => {
-          console.log("[WebSocket] Connected to", serverUrl);
+          // An agent that echoes nothing predates versioning, so fall back to
+          // the v0 registration frame rather than sending it a hello it will
+          // reject.
+          if (this.ws?.protocol !== DEVICE_SUBPROTOCOL_V1) {
+            this.offeredVersion = 0;
+          }
+
+          console.log(
+            "[WebSocket] Connected to",
+            serverUrl,
+            `(protocol v${this.offeredVersion})`,
+          );
           this.reconnectAttempts = 0;
           useAppStore.getState().setConnectionStatus("connected");
           resolve();
@@ -104,6 +141,7 @@ class WebSocketService {
 
   disconnect(): void {
     this.isManualDisconnect = true;
+    this.sendGoodbye("device disconnected");
     this.stopHeartbeat();
     this.cancelReconnect();
     this.clearPendingRequests();
@@ -117,7 +155,7 @@ class WebSocketService {
     useAppStore.getState().disconnect();
   }
 
-  async registerDevice(): Promise<RegisterDeviceResponse> {
+  async registerDevice(): Promise<RegisterDeviceResponse | HelloResponse> {
     const store = useAppStore.getState();
     const { device } = store;
 
@@ -125,34 +163,66 @@ class WebSocketService {
     const platform: "ios" | "android" = Platform.OS === "ios" ? "ios" : "android";
     const deviceName = device.deviceName || getDeviceName();
 
-    const message: RegisterDeviceMessage = {
-      id: this.generateRequestId(),
-      type: "registerDevice",
-      payload: {
-        deviceName,
-        platform,
-        appVersion: APP_VERSION,
-        capabilities: {
-          canRead: true,
-          canWrite: false,
-          nfcType: "isodep",
-        },
-        metadata: getDeviceMetadata(),
-      },
+    const registration = {
+      deviceName,
+      platform,
+      appVersion: APP_VERSION,
+      capabilities: getDeviceCapabilities(),
+      metadata: getDeviceMetadata(),
     };
 
-    const response = await this.sendRequest<RegisterDeviceResponse>(message);
+    // The first frame's type is what actually selects the dialect, so the
+    // subprotocol the agent echoed is a hint about which one it will accept.
+    const message: HelloMessage | RegisterDeviceMessage =
+      this.offeredVersion === 1
+        ? {
+            id: this.generateRequestId(),
+            type: "hello",
+            payload: { protocolVersion: 1, ...registration },
+          }
+        : {
+            id: this.generateRequestId(),
+            type: "registerDevice",
+            payload: registration,
+          };
+
+    const response = await this.sendRequest<RegisterDeviceResponse | HelloResponse>(message);
 
     if (response.success) {
+      // Read the version back rather than assuming the request was honoured —
+      // the agent answers at its own maximum when asked for something newer.
+      this.negotiatedVersion =
+        response.type === "helloResponse" ? response.payload.protocolVersion : 0;
+
       store.setDeviceId(response.payload.deviceID);
       store.setRegistered(true);
       store.setServerInfo(response.payload.serverInfo);
+      store.setProtocolVersion(this.negotiatedVersion);
       store.setConnectionStatus("registered");
       store.setLastConnected(new Date());
       this.startHeartbeat();
     }
 
     return response;
+  }
+
+  /**
+   * Tell the agent this device is leaving, so it logs a departure rather than
+   * waiting out a device it believes it lost. Best effort: a socket that is
+   * already gone simply has nothing to say.
+   */
+  private sendGoodbye(reason: string): void {
+    const deviceId = useAppStore.getState().device.deviceId;
+    if (!deviceId || this.negotiatedVersion < 1 || !this.isConnected()) {
+      return;
+    }
+
+    const message: GoodbyeMessage = {
+      type: "goodbye",
+      payload: { deviceID: deviceId, reason },
+    };
+
+    this.send(message);
   }
 
   sendTagScanned(tagData: Omit<TagScannedPayload, "deviceID">): void {
