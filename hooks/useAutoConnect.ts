@@ -1,101 +1,84 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useAppStore } from "@/stores";
 import { discoveryService } from "@/services/discovery";
 import { websocketService } from "@/services/websocket";
+import { useNetworkStatus } from "./useNetworkStatus";
+
+// How long a failed address is left alone before it is worth dialling again.
+const RETRY_COOLDOWN = 15000;
 
 /**
- * Hook that automatically discovers servers and connects to the first one found.
- * Starts discovery on mount and auto-connects when a server is discovered.
+ * Finds the agent on the local network and connects to it without being asked.
+ *
+ * Discovery runs only while the app has nothing to talk to, and stops as soon
+ * as it does — including while the socket layer is working through its own
+ * reconnect budget, which does not need discovery's help.
  */
 export function useAutoConnect() {
-  const connection = useAppStore((state) => state.connection);
-  const discovery = useAppStore((state) => state.discovery);
-  const clearDiscoveredServers = useAppStore((state) => state.clearDiscoveredServers);
-  const isConnectingRef = useRef(false);
-  const hasAutoConnectedRef = useRef(false);
-  const hasStartedRef = useRef(false);
+  const status = useAppStore((state) => state.connection.status);
+  const manualDisconnect = useAppStore((state) => state.connection.manualDisconnect);
+  const servers = useAppStore((state) => state.discovery.discoveredServers);
+  const isSearching = useAppStore((state) => state.discovery.isSearching);
+  const { isOnline } = useNetworkStatus();
 
-  // Start discovery on mount - always clear old servers and start fresh
+  const lastAttempt = useRef<{ url: string; at: number } | null>(null);
+  const inFlight = useRef(false);
+
+  // "error" is idle too: the socket layer has spent its retries, so finding the
+  // agent again is now discovery's job.
+  const isIdle = status === "disconnected" || status === "error";
+  const shouldSearch = isIdle && !manualDisconnect && isOnline;
+
   useEffect(() => {
-    if (hasStartedRef.current) return;
-    hasStartedRef.current = true;
-
-    // Clear any stale servers from previous session
-    clearDiscoveredServers();
-
-    // Only start discovery if not already connected
-    if (
-      connection.status !== "connected" &&
-      connection.status !== "registered" &&
-      connection.status !== "connecting"
-    ) {
-      console.log("[AutoConnect] Starting server discovery on mount");
-      discoveryService.startDiscovery();
+    if (!shouldSearch) {
+      return;
     }
+
+    discoveryService.startDiscovery();
 
     return () => {
       discoveryService.stopDiscovery();
     };
-  }, [clearDiscoveredServers, connection.status]);
+  }, [shouldSearch]);
 
-  // Auto-connect only when exactly one server is discovered
   useEffect(() => {
-    const servers = discovery.discoveredServers;
-
-    // Don't auto-connect if:
-    // - Already connected/registered
-    // - Currently connecting
-    // - No servers discovered
-    // - Multiple servers discovered (let user choose)
-    // - Already auto-connected this session
-    if (
-      connection.status === "connected" ||
-      connection.status === "registered" ||
-      connection.status === "connecting" ||
-      isConnectingRef.current ||
-      servers.length !== 1 ||
-      hasAutoConnectedRef.current
-    ) {
+    // One agent is an answer; several is a question only the user can settle.
+    if (!shouldSearch || inFlight.current || servers.length !== 1) {
       return;
     }
 
     const server = servers[0];
-    isConnectingRef.current = true;
-    hasAutoConnectedRef.current = true;
-
-    console.log("[AutoConnect] Discovered server, auto-connecting:", server.name);
-
     const url = discoveryService.buildWebSocketUrl(server);
+    const previous = lastAttempt.current;
+
+    // Without this, an agent that is advertising but refusing connections would
+    // be dialled again the moment its own retry budget ran out.
+    if (previous?.url === url && Date.now() - previous.at < RETRY_COOLDOWN) {
+      return;
+    }
+
+    inFlight.current = true;
+    lastAttempt.current = { url, at: Date.now() };
 
     websocketService
-      .connect(url)
-      .then(() => websocketService.registerDevice())
-      .then(() => {
-        console.log("[AutoConnect] Successfully connected to", server.name);
-        discoveryService.stopDiscovery();
-      })
-      .catch((error) => {
-        console.error("[AutoConnect] Failed to connect:", error);
-        // Reset so we can try again if a new server is found
-        hasAutoConnectedRef.current = false;
-      })
+      .connectAndRegister(url)
+      .then(() => discoveryService.stopDiscovery())
+      .catch((error) => console.error("[AutoConnect] Failed to connect:", error))
       .finally(() => {
-        isConnectingRef.current = false;
+        inFlight.current = false;
       });
-  }, [discovery.discoveredServers, connection.status]);
+  }, [shouldSearch, servers]);
 
-  // Retry connection
   const retry = useCallback(() => {
-    hasAutoConnectedRef.current = false;
-    isConnectingRef.current = false;
-    clearDiscoveredServers();
-    discoveryService.stopDiscovery();
-    discoveryService.startDiscovery();
-  }, [clearDiscoveredServers]);
+    lastAttempt.current = null;
+    useAppStore.getState().setManualDisconnect(false);
+    discoveryService.restartDiscovery();
+  }, []);
 
   return {
-    isSearching: discovery.isSearching,
-    servers: discovery.discoveredServers,
+    isSearching,
+    isOnline,
+    servers,
     retry,
   };
 }

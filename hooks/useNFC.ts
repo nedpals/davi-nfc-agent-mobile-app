@@ -1,35 +1,34 @@
-import { useEffect, useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useAppStore } from "@/stores";
 import { nfcService } from "@/services/nfc";
 
 export function useNFC() {
   const nfc = useAppStore((state) => state.nfc);
+  const clearHistory = useAppStore((state) => state.clearScanHistory);
   const [isInitialized, setIsInitialized] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
 
-  // Initialize NFC on mount and auto-enable foreground dispatch
   useEffect(() => {
     let mounted = true;
 
     async function init() {
       try {
         const result = await nfcService.init();
-        if (mounted) {
-          setIsInitialized(true);
-          if (!result.supported) {
-            setInitError("NFC is not supported on this device");
-          } else if (!result.enabled) {
-            setInitError("NFC is disabled. Please enable it in settings.");
-          } else {
-            // Auto-enable foreground dispatch when app opens
-            await nfcService.enableForegroundDispatch();
-          }
+        if (!mounted) {
+          return;
+        }
+
+        setIsInitialized(true);
+
+        // Whether NFC is supported or switched on is already in the store, and
+        // the UI reads it from there; only a genuine failure to start the
+        // reader belongs here.
+        if (result.supported && result.enabled) {
+          await nfcService.enableForegroundDispatch();
         }
       } catch (error) {
         if (mounted) {
-          setInitError(
-            error instanceof Error ? error.message : "Failed to initialize NFC"
-          );
+          setInitError(error instanceof Error ? error.message : "Failed to start NFC");
         }
       }
     }
@@ -41,49 +40,31 @@ export function useNFC() {
     };
   }, []);
 
-  // Toggle tag processing (NFC stays captured, just controls whether tags are processed)
-  const toggleProcessing = useCallback(() => {
-    nfcService.toggleProcessing();
-  }, []);
-
-  // Enable tag processing
-  const enableProcessing = useCallback(() => {
-    nfcService.setProcessingEnabled(true);
-  }, []);
-
-  // Disable tag processing
-  const disableProcessing = useCallback(() => {
-    nfcService.setProcessingEnabled(false);
-  }, []);
-
-  const checkEnabled = useCallback(async () => {
-    return await nfcService.checkEnabled();
-  }, []);
-
-  // Clear the last scanned tag
-  const clearLastTag = useCallback(() => {
-    nfcService.clearLastTag();
-  }, []);
+  const toggleProcessing = useCallback(() => nfcService.toggleProcessing(), []);
+  const enableProcessing = useCallback(() => nfcService.setProcessingEnabled(true), []);
+  const disableProcessing = useCallback(() => nfcService.setProcessingEnabled(false), []);
+  const checkEnabled = useCallback(() => nfcService.checkEnabled(), []);
+  const clearLastTag = useCallback(() => nfcService.clearLastTag(), []);
+  const openSystemSettings = useCallback(() => nfcService.openSystemSettings(), []);
 
   return {
-    // State
     isSupported: nfc.isSupported,
     isEnabled: nfc.isEnabled,
-    isActive: nfc.isActive, // Whether NFC foreground dispatch is active
-    processingEnabled: nfc.processingEnabled, // Whether tags are being processed
+    isActive: nfc.isActive,
+    processingEnabled: nfc.processingEnabled,
     isInitialized,
     initError,
 
-    // Tag data
     lastTag: nfc.lastTag,
     scanHistory: nfc.scanHistory,
 
-    // Actions
     toggleProcessing,
     enableProcessing,
     disableProcessing,
     checkEnabled,
     clearLastTag,
-    clearHistory: useAppStore.getState().clearScanHistory,
+    clearHistory,
+    openSystemSettings,
+    canOpenSystemSettings: nfcService.canOpenSystemSettings(),
   };
 }

@@ -1,86 +1,98 @@
-import { useEffect } from "react";
+import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
+import { useState } from "react";
 import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  FlatList,
   ActivityIndicator,
   Alert,
+  FlatList,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
-import { useServerDiscovery, useConnection } from "@/hooks";
+import { EmptyState } from "@/components/EmptyState";
+import { ModalHeader } from "@/components/ModalHeader";
+import { colors, fontFamily, radius, shadows, spacing, typography } from "@/constants/theme";
+import { useConnection, useServerDiscovery } from "@/hooks";
+import { preferredAddress } from "@/services/discovery";
 import type { DiscoveredServer } from "@/types/protocol";
 
 function ServerItem({
   server,
+  busy,
   onPress,
 }: {
   server: DiscoveredServer;
+  busy: boolean;
   onPress: () => void;
 }) {
+  const { version, tls } = server.txtRecords ?? {};
+
   return (
-    <TouchableOpacity style={styles.serverItem} onPress={onPress}>
-      <View style={styles.serverInfo}>
-        <Text style={styles.serverName}>{server.name}</Text>
-        <Text style={styles.serverAddress}>
-          {server.host}:{server.port}
+    <TouchableOpacity
+      style={styles.item}
+      onPress={onPress}
+      disabled={busy}
+      accessibilityRole="button"
+      accessibilityLabel={`Connect to ${server.name}`}
+    >
+      <View style={styles.itemText}>
+        <Text style={styles.itemName} numberOfLines={1}>
+          {server.name}
         </Text>
-        {server.txtRecords.version && (
-          <Text style={styles.serverVersion}>v{server.txtRecords.version}</Text>
-        )}
+        <Text style={styles.itemAddress} numberOfLines={1}>
+          {preferredAddress(server)}:{server.port}
+        </Text>
+        <View style={styles.tags}>
+          {version ? <Text style={styles.tag}>v{version}</Text> : null}
+          <Text style={styles.tag}>{tls === "false" ? "No TLS" : "TLS"}</Text>
+        </View>
       </View>
-      <Text style={styles.arrow}>→</Text>
+
+      {busy ? (
+        <ActivityIndicator size="small" color={colors.accent} />
+      ) : (
+        <Ionicons name="chevron-forward" size={20} color={colors.textFaint} />
+      )}
     </TouchableOpacity>
   );
 }
 
 export default function ServerListScreen() {
   const router = useRouter();
-  const { servers, isSearching, startDiscovery, stopDiscovery, refresh } =
-    useServerDiscovery();
+  const { servers, isSearching, refresh } = useServerDiscovery({ autoStart: true });
   const { connectToServer } = useConnection();
+  const [connectingTo, setConnectingTo] = useState<string | null>(null);
 
-  useEffect(() => {
-    startDiscovery();
-    return () => stopDiscovery();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const handleSelectServer = async (server: DiscoveredServer) => {
-    stopDiscovery();
+  const handleSelect = async (server: DiscoveredServer) => {
+    setConnectingTo(server.name);
     try {
       await connectToServer(server);
-      Alert.alert("Connected", `Connected to ${server.name}`, [
-        { text: "OK", onPress: () => router.back() },
-      ]);
+      router.back();
     } catch (error) {
       Alert.alert(
-        "Connection Failed",
-        error instanceof Error ? error.message : "Failed to connect"
+        "Could not connect",
+        error instanceof Error ? error.message : "The agent did not answer."
       );
-      // Resume discovery
-      startDiscovery();
+    } finally {
+      setConnectingTo(null);
     }
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()}>
-          <Text style={styles.closeButton}>Close</Text>
-        </TouchableOpacity>
-        <Text style={styles.title}>Find Servers</Text>
-        <TouchableOpacity onPress={refresh}>
-          <Text style={styles.refreshButton}>Refresh</Text>
-        </TouchableOpacity>
-      </View>
+    <SafeAreaView style={styles.screen}>
+      <ModalHeader
+        title="Agents nearby"
+        onClose={() => router.back()}
+        actionLabel="Refresh"
+        onAction={refresh}
+      />
 
       {isSearching && (
-        <View style={styles.searchingBanner}>
-          <ActivityIndicator size="small" color="#3B82F6" />
-          <Text style={styles.searchingText}>Searching for servers...</Text>
+        <View style={styles.banner}>
+          <ActivityIndicator size="small" color={colors.accentDeep} />
+          <Text style={styles.bannerText}>Browsing the local network…</Text>
         </View>
       )}
 
@@ -88,150 +100,106 @@ export default function ServerListScreen() {
         data={servers}
         keyExtractor={(item) => item.name}
         renderItem={({ item }) => (
-          <ServerItem server={item} onPress={() => handleSelectServer(item)} />
+          <ServerItem
+            server={item}
+            busy={connectingTo === item.name}
+            onPress={() => handleSelect(item)}
+          />
         )}
-        contentContainerStyle={styles.list}
+        contentContainerStyle={[styles.list, servers.length === 0 && styles.listEmpty]}
+        ItemSeparatorComponent={() => <View style={styles.separator} />}
         ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            {isSearching ? (
-              <Text style={styles.emptyText}>
-                Looking for NFC Agent servers on your network...
-              </Text>
-            ) : (
-              <>
-                <Text style={styles.emptyText}>No servers found</Text>
-                <Text style={styles.emptySubtext}>
-                  Make sure the NFC Agent server is running and you&apos;re on the
-                  same network
-                </Text>
-                <TouchableOpacity style={styles.retryButton} onPress={refresh}>
-                  <Text style={styles.retryButtonText}>Try Again</Text>
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
+          isSearching ? (
+            <EmptyState
+              title="Looking for agents"
+              message="The agent advertises itself over mDNS on the network it is running on."
+            />
+          ) : (
+            <EmptyState
+              title="No agents found"
+              message="Check that the agent is running and that this phone is on the same network."
+              actionLabel="Search again"
+              onAction={refresh}
+            />
+          )
         }
       />
 
-      <View style={styles.footer}>
-        <Text style={styles.footerText}>
-          Can&apos;t find your server? Enter the URL manually in Settings.
-        </Text>
-      </View>
+      <Text style={styles.footer}>Not listed? Enter the address by hand in Settings.</Text>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  screen: {
     flex: 1,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: colors.background,
   },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: "#F3F4F6",
-  },
-  closeButton: {
-    fontSize: 16,
-    color: "#3B82F6",
-  },
-  title: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: "#1F2937",
-  },
-  refreshButton: {
-    fontSize: 16,
-    color: "#3B82F6",
-  },
-  searchingBanner: {
+  banner: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    padding: 12,
-    backgroundColor: "#EFF6FF",
-    gap: 8,
+    gap: spacing.sm,
+    paddingVertical: spacing.md,
+    marginHorizontal: spacing.lg,
+    borderRadius: radius.md,
+    backgroundColor: colors.accentSoft,
   },
-  searchingText: {
-    color: "#3B82F6",
-    fontSize: 14,
+  bannerText: {
+    ...typography.caption,
+    color: colors.accentDeep,
   },
   list: {
-    padding: 16,
+    padding: spacing.lg,
+  },
+  listEmpty: {
     flexGrow: 1,
   },
-  serverItem: {
+  separator: {
+    height: spacing.md,
+  },
+  item: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#F9FAFB",
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 12,
+    gap: spacing.md,
+    padding: spacing.lg,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    ...shadows.card,
   },
-  serverInfo: {
+  itemText: {
     flex: 1,
   },
-  serverName: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#1F2937",
-    marginBottom: 4,
+  itemName: {
+    ...typography.bodyStrong,
+    color: colors.text,
   },
-  serverAddress: {
-    fontSize: 14,
-    color: "#6B7280",
-    fontFamily: "monospace",
+  itemAddress: {
+    ...typography.caption,
+    fontFamily: fontFamily.mono,
+    color: colors.textMuted,
+    marginTop: 2,
   },
-  serverVersion: {
-    fontSize: 12,
-    color: "#9CA3AF",
-    marginTop: 4,
+  tags: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    marginTop: spacing.sm,
   },
-  arrow: {
-    fontSize: 20,
-    color: "#9CA3AF",
-  },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    paddingHorizontal: 32,
-    paddingVertical: 64,
-  },
-  emptyText: {
-    fontSize: 16,
-    color: "#6B7280",
-    textAlign: "center",
-  },
-  emptySubtext: {
-    fontSize: 14,
-    color: "#9CA3AF",
-    textAlign: "center",
-    marginTop: 8,
-  },
-  retryButton: {
-    marginTop: 24,
-    backgroundColor: "#3B82F6",
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 8,
-  },
-  retryButtonText: {
-    color: "#FFFFFF",
-    fontWeight: "600",
+  tag: {
+    ...typography.caption,
+    fontSize: 11,
+    color: colors.textMuted,
+    backgroundColor: colors.surfaceMuted,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: radius.sm,
+    overflow: "hidden",
   },
   footer: {
-    padding: 16,
-    borderTopWidth: 1,
-    borderTopColor: "#F3F4F6",
-  },
-  footerText: {
-    fontSize: 12,
-    color: "#9CA3AF",
+    ...typography.caption,
+    color: colors.textFaint,
     textAlign: "center",
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
   },
 });

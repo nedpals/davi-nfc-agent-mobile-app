@@ -32,11 +32,13 @@ export const WS_CONFIG = {
   },
 };
 
-// NFC configuration
-export const NFC_CONFIG = {
-  // Technologies to scan for
-  DEFAULT_TECH: "Ndef",
-};
+// How many scans the app keeps, and how many of those survive a restart.
+export const HISTORY_LIMIT = 50;
+export const PERSISTED_HISTORY_LIMIT = 20;
+
+// Reader mode re-reads a tag that stays in the field, so the same UID arriving
+// again inside this window is the same presentation rather than a new scan.
+export const TAG_DEDUPE_WINDOW = 2000;
 
 // mDNS discovery configuration
 export const DISCOVERY_CONFIG = {
@@ -48,13 +50,6 @@ export const DISCOVERY_CONFIG = {
 
   // Discovery timeout in milliseconds
   TIMEOUT: 30000,
-};
-
-// Storage keys for AsyncStorage
-export const STORAGE_KEYS = {
-  SERVER_URL: "@davi_nfc_scanner/server_url",
-  DEVICE_NAME: "@davi_nfc_scanner/device_name",
-  SCAN_HISTORY: "@davi_nfc_scanner/scan_history",
 };
 
 // Get the real device name, with fallback

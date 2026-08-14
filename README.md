@@ -19,6 +19,30 @@ A development build is required — `react-native-zeroconf` and
 `react-native-nfc-manager` are native modules, so discovery and scanning do not
 work in Expo Go.
 
+```bash
+npm test          # jest-expo, no device needed
+npm run lint
+npx tsc --noEmit
+```
+
+The tests cover the parts that are wrong in ways a device would not make
+obvious: URL building, the persisted store, tag parsing, the connect and
+reconnect state machine, and the auto-connect rules. Native modules are mocked
+in `jest.setup.js`, so the suite runs anywhere.
+
+## Scanning
+
+The reader is armed while the app is in the foreground and pauses on the way to
+the background. A tag that stays against the phone is re-read continuously by
+reader mode; a repeat of the same UID inside two seconds is treated as the same
+presentation rather than a new scan, so it is neither recorded twice nor sent
+twice.
+
+Every scan is kept locally — **the clock button in the header** shows the
+history, whether or not the agent was listening at the time. The fifty most
+recent are held for the session and the newest twenty survive a restart.
+Dismissing the tag in the drawer tells the agent it is gone.
+
 ## Connecting to an agent
 
 The agent serves devices and clients on **one port** (default 9470), telling
@@ -29,6 +53,12 @@ appends that itself; a host and port are all you need to supply.
 app browses for it and auto-connects when exactly one agent is found, taking the
 port and path from the advertisement. Whether the agent is serving TLS is not
 advertised — the app assumes it is, and pairing reports it for certain.
+
+Browsing runs only while there is nothing to talk to, and starts again by
+itself once the socket layer has spent its reconnect budget — except after
+**Disconnect**, which is taken as meaning it. An agent that refuses a
+connection is left alone for fifteen seconds rather than dialled in a loop, and
+more than one agent on the network is a choice the app leaves to you.
 
 **Pairing.** **Settings → Pairing** exchanges the six-digit PIN the agent shows
 on the kiosk for this device's own credential. The exchange runs over plain HTTP
@@ -108,6 +138,12 @@ After that: `tagScanned`, `tagRemoved`, a `deviceHeartbeat` every 10 seconds, an
 `code`, which is the field worth acting on — except `TAG_REMOVED`, where the
 retry is asking the person to present the tag again.
 
+An error frame is recorded without being treated as a lost connection: the
+socket is still open and still registered, and one refused tag is not a reason
+to tear it down. An error the agent marks non-retryable — a registration it
+refuses — stops the reconnect loop instead of spending its ten attempts on an
+answer that will not change.
+
 Capabilities are declared per platform and honestly: read only, no transceive,
 no lock, and MIFARE Classic on Android only, since CoreNFC cannot reach it.
 
@@ -121,9 +157,21 @@ replayed to the agent.
 | Path | What it is |
 |---|---|
 | `services/websocket.ts` | The agent connection — registration, heartbeat, reconnection |
-| `services/agent-url.ts` | Builds the device URL: scheme, path, discriminator, secret |
+| `services/agent-url.ts` | Builds the device URL: scheme, port, path, discriminator, secret |
 | `services/discovery.ts` | mDNS browsing and the URL built from a resolved service |
-| `services/nfc.ts` | Tag reading, NDEF parsing, UID and technology normalization |
-| `stores/index.ts` | Zustand store; what persists is set by `partialize` |
+| `services/nfc.ts` | The reader's lifecycle: arming it, dedupe, and what to do with a tag |
+| `services/nfc-parsing.ts` | Pure tag parsing — UID, technology, type, NDEF records |
+| `stores/index.ts` | Zustand store; `partialize` sets what persists and `merge` how it comes back |
+| `hooks/` | What the screens see: connection, pairing, NFC, discovery, network |
+| `components/` | `Button`, `Section`, `Notice`, `EmptyState` and the screen-specific parts |
+| `constants/theme.ts` | Colours, spacing, radii, type and shadows — the whole palette |
 | `types/protocol.ts` | Wire types for every message in both directions |
 | `plugins/` | Config plugins applied at prebuild |
+| `__tests__/` | The suite described under [Running it](#running-it) |
+
+Two details in `stores/index.ts` are worth knowing before changing them. Zustand
+merges persisted state shallowly, so a `partialize` that names three fields of a
+slice would replace the whole slice and leave everything it omits `undefined`;
+`merge` puts each slice back on top of its defaults instead. And JSON has no
+date type, so `scannedAt` and `lastConnected` come back as strings and are
+revived there — a `Date` in the types has to be a `Date` at runtime.

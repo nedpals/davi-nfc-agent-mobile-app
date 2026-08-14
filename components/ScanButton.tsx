@@ -1,186 +1,155 @@
-import {
-  TouchableOpacity,
-  Text,
-  StyleSheet,
-  View,
-  Animated,
-} from "react-native";
 import { useEffect, useRef } from "react";
-import Svg, { Circle, Path, G, Defs, LinearGradient, Stop } from "react-native-svg";
+import { Animated, Easing, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import Svg, { Circle, G, Path } from "react-native-svg";
+import { colors, shadows, spacing } from "@/constants/theme";
 
 interface ScanButtonProps {
   onPress: () => void;
   processingEnabled: boolean;
   disabled?: boolean;
+  // Why the button is unavailable, when the caller knows better than "no NFC".
+  disabledReason?: string;
 }
 
-// ACR122U-inspired NFC icon component
-function NFCIcon({ color = "#00A4E4", size = 80 }: { color?: string; size?: number }) {
+const SIZE = 220;
+const CENTER = SIZE / 2;
+const TRACK_RADIUS = CENTER - 10;
+const CIRCUMFERENCE = 2 * Math.PI * TRACK_RADIUS;
+
+function NFCWaves({ color }: { color: string }) {
   return (
-    <Svg width={size} height={size} viewBox="0 0 100 100">
-      <Defs>
-        <LinearGradient id="nfcGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-          <Stop offset="0%" stopColor={color} />
-          <Stop offset="100%" stopColor="#0077B3" />
-        </LinearGradient>
-      </Defs>
-      {/* NFC Text */}
-      <Text
-        x="50"
-        y="58"
-        fontSize="28"
-        fontWeight="bold"
-        fill="url(#nfcGrad)"
-        textAnchor="middle"
-      >
-        NFC
-      </Text>
-      {/* Concentric signal waves (right side) */}
-      <G transform="translate(75, 50)">
-        <Path
-          d="M 0 -12 A 12 12 0 0 1 0 12"
-          stroke={color}
-          strokeWidth="3"
-          fill="none"
-          strokeLinecap="round"
-        />
-        <Path
-          d="M 0 -20 A 20 20 0 0 1 0 20"
-          stroke={color}
-          strokeWidth="3"
-          fill="none"
-          strokeLinecap="round"
-          opacity="0.7"
-        />
-        <Path
-          d="M 0 -28 A 28 28 0 0 1 0 28"
-          stroke={color}
-          strokeWidth="3"
-          fill="none"
-          strokeLinecap="round"
-          opacity="0.4"
-        />
+    <Svg width={38} height={54} viewBox="0 0 38 54">
+      <G transform="translate(4, 27)">
+        {[9, 16, 23].map((radius, index) => (
+          <Path
+            key={radius}
+            d={`M 0 -${radius} A ${radius} ${radius} 0 0 1 0 ${radius}`}
+            stroke={color}
+            strokeWidth={2.5}
+            fill="none"
+            strokeLinecap="round"
+            opacity={1 - index * 0.3}
+          />
+        ))}
       </G>
     </Svg>
   );
 }
 
-export function ScanButton({ onPress, processingEnabled, disabled }: ScanButtonProps) {
-  const pulseAnim = useRef(new Animated.Value(1)).current;
-  const rotateAnim = useRef(new Animated.Value(0)).current;
+export function ScanButton({
+  onPress,
+  processingEnabled,
+  disabled,
+  disabledReason,
+}: ScanButtonProps) {
+  const pulse = useRef(new Animated.Value(0)).current;
+  const spin = useRef(new Animated.Value(0)).current;
+  const isScanning = processingEnabled && !disabled;
 
   useEffect(() => {
-    if (processingEnabled && !disabled) {
-      // Pulse animation when scanning
-      const pulse = Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulseAnim, {
-            toValue: 1.05,
-            duration: 1000,
-            useNativeDriver: true,
-          }),
-          Animated.timing(pulseAnim, {
-            toValue: 1,
-            duration: 1000,
-            useNativeDriver: true,
-          }),
-        ])
-      );
-      pulse.start();
-      return () => pulse.stop();
-    } else {
-      pulseAnim.setValue(1);
+    if (!isScanning) {
+      pulse.setValue(0);
+      spin.setValue(0);
+      return;
     }
-  }, [processingEnabled, disabled]);
 
-  const getRingColor = () => {
-    if (disabled) return "#D1D5DB";
-    if (processingEnabled) return "#1F4E5F";
-    return "#374151";
-  };
+    const breathe = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: 1,
+          duration: 1100,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulse, {
+          toValue: 0,
+          duration: 1100,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ])
+    );
 
-  const getAccentColor = () => {
-    if (disabled) return "#9CA3AF";
-    if (processingEnabled) return "#00A4E4";
-    return "#6B7280";
-  };
+    // The travelling arc is what separates "armed and listening" from a button
+    // that merely looks enabled.
+    const sweep = Animated.loop(
+      Animated.timing(spin, {
+        toValue: 1,
+        duration: 2600,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      })
+    );
 
-  const getStatusText = () => {
-    if (disabled) return "NFC Unavailable";
-    if (!processingEnabled) return "Paused";
-    return "Scanning";
-  };
+    breathe.start();
+    sweep.start();
 
-  const getSubText = () => {
-    if (disabled) return "Enable NFC to scan";
-    if (!processingEnabled) return "Tap to resume";
-    return "Tap to pause";
-  };
+    return () => {
+      breathe.stop();
+      sweep.stop();
+    };
+  }, [isScanning, pulse, spin]);
+
+  const accent = disabled ? colors.disabled : processingEnabled ? colors.accent : colors.neutral;
+  const trackColor = disabled ? colors.borderSubtle : colors.accentSoft;
+
+  const scale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.04] });
+  const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "360deg"] });
+
+  const statusText = disabled ? "NFC unavailable" : processingEnabled ? "Scanning" : "Paused";
+  // While scanning, what to do with a tag is more use than an invitation to
+  // pause something the big button already invites.
+  const hintText = disabled
+    ? (disabledReason ?? "Turn on NFC to scan")
+    : processingEnabled
+      ? "Hold a tag to the back of the phone"
+      : "Tap to resume";
 
   return (
     <TouchableOpacity
       onPress={onPress}
       disabled={disabled}
       activeOpacity={0.9}
+      accessibilityRole="button"
+      accessibilityState={{ disabled: !!disabled }}
+      accessibilityLabel={`${statusText}. ${hintText}`}
       style={styles.touchable}
     >
-      <Animated.View
-        style={[
-          styles.outerRing,
-          { borderColor: getRingColor() },
-          { transform: [{ scale: pulseAnim }] },
-        ]}
-      >
-        {/* Progress arc segments - ACR122U style */}
-        <View style={styles.arcContainer}>
-          <View style={[styles.arcSegment, styles.arcTop, { borderColor: processingEnabled ? "#00A4E4" : "#9CA3AF" }]} />
-          <View style={[styles.arcSegment, styles.arcRight, { borderColor: processingEnabled ? "#4B5563" : "#D1D5DB" }]} />
-          <View style={[styles.arcSegment, styles.arcBottom, { borderColor: processingEnabled ? "#6B7280" : "#E5E7EB" }]} />
-          <View style={[styles.arcSegment, styles.arcLeft, { borderColor: processingEnabled ? "#1F4E5F" : "#9CA3AF" }]} />
-        </View>
+      <Animated.View style={[styles.ring, { transform: [{ scale }] }]}>
+        <Animated.View style={[styles.arc, { transform: [{ rotate }] }]}>
+          <Svg width={SIZE} height={SIZE}>
+            <Circle
+              cx={CENTER}
+              cy={CENTER}
+              r={TRACK_RADIUS}
+              stroke={trackColor}
+              strokeWidth={10}
+              fill="none"
+            />
+            <Circle
+              cx={CENTER}
+              cy={CENTER}
+              r={TRACK_RADIUS}
+              stroke={accent}
+              strokeWidth={10}
+              fill="none"
+              strokeLinecap="round"
+              strokeDasharray={`${CIRCUMFERENCE * 0.28} ${CIRCUMFERENCE}`}
+              // Start the arc at the top rather than at three o'clock.
+              transform={`rotate(-90 ${CENTER} ${CENTER})`}
+            />
+          </Svg>
+        </Animated.View>
 
-        <View style={styles.innerCircle}>
-          {/* NFC Logo */}
-          <View style={styles.nfcContainer}>
-            <Text style={[styles.nfcText, { color: getAccentColor() }]}>NFC</Text>
-            {/* Signal waves */}
-            <Svg width={40} height={50} viewBox="0 0 40 50" style={styles.waves}>
-              <G transform="translate(5, 25)">
-                <Path
-                  d="M 0 -8 A 8 8 0 0 1 0 8"
-                  stroke={getAccentColor()}
-                  strokeWidth="2.5"
-                  fill="none"
-                  strokeLinecap="round"
-                />
-                <Path
-                  d="M 0 -15 A 15 15 0 0 1 0 15"
-                  stroke={getAccentColor()}
-                  strokeWidth="2.5"
-                  fill="none"
-                  strokeLinecap="round"
-                  opacity={processingEnabled ? 0.7 : 0.5}
-                />
-                <Path
-                  d="M 0 -22 A 22 22 0 0 1 0 22"
-                  stroke={getAccentColor()}
-                  strokeWidth="2.5"
-                  fill="none"
-                  strokeLinecap="round"
-                  opacity={processingEnabled ? 0.4 : 0.3}
-                />
-              </G>
-            </Svg>
-          </View>
+        <View style={[styles.core, disabled && styles.coreDisabled]}>
+          <Text style={[styles.wordmark, { color: accent }]}>NFC</Text>
+          <NFCWaves color={accent} />
         </View>
       </Animated.View>
 
-      {/* Status text below */}
-      <View style={styles.statusContainer}>
-        <Text style={[styles.statusText, { color: getAccentColor() }]}>
-          {getStatusText()}
-        </Text>
-        <Text style={styles.subText}>{getSubText()}</Text>
+      <View style={styles.caption}>
+        <Text style={[styles.status, { color: accent }]}>{statusText}</Text>
+        <Text style={styles.hint}>{hintText}</Text>
       </View>
     </TouchableOpacity>
   );
@@ -190,82 +159,45 @@ const styles = StyleSheet.create({
   touchable: {
     alignItems: "center",
   },
-  outerRing: {
-    width: 220,
-    height: 220,
-    borderRadius: 110,
-    borderWidth: 12,
-    backgroundColor: "#FFFFFF",
-    justifyContent: "center",
+  ring: {
+    width: SIZE,
+    height: SIZE,
     alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    elevation: 8,
-  },
-  arcContainer: {
-    position: "absolute",
-    width: 220,
-    height: 220,
-  },
-  arcSegment: {
-    position: "absolute",
-    width: 220,
-    height: 220,
-    borderRadius: 110,
-    borderWidth: 8,
-    borderColor: "transparent",
-  },
-  arcTop: {
-    borderTopColor: "inherit",
-    transform: [{ rotate: "-45deg" }],
-  },
-  arcRight: {
-    borderRightColor: "inherit",
-    transform: [{ rotate: "-45deg" }],
-  },
-  arcBottom: {
-    borderBottomColor: "inherit",
-    transform: [{ rotate: "-45deg" }],
-  },
-  arcLeft: {
-    borderLeftColor: "inherit",
-    transform: [{ rotate: "-45deg" }],
-  },
-  innerCircle: {
-    width: 160,
-    height: 160,
-    borderRadius: 80,
-    backgroundColor: "#FFFFFF",
     justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 3,
-    borderColor: "#1F4E5F",
   },
-  nfcContainer: {
+  arc: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  core: {
+    width: 158,
+    height: 158,
+    borderRadius: 79,
+    backgroundColor: colors.surface,
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
+    ...shadows.raised,
   },
-  nfcText: {
-    fontSize: 36,
+  coreDisabled: {
+    backgroundColor: colors.surfaceMuted,
+  },
+  wordmark: {
+    fontSize: 34,
     fontWeight: "800",
     letterSpacing: 1,
+    marginRight: -2,
   },
-  waves: {
-    marginLeft: -5,
-  },
-  statusContainer: {
-    marginTop: 20,
+  caption: {
+    marginTop: spacing.xl,
     alignItems: "center",
   },
-  statusText: {
+  status: {
     fontSize: 18,
     fontWeight: "700",
   },
-  subText: {
+  hint: {
     fontSize: 13,
-    color: "#6B7280",
-    marginTop: 4,
+    color: colors.textMuted,
+    marginTop: spacing.xs,
   },
 });

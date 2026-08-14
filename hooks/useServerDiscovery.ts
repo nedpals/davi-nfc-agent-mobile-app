@@ -3,52 +3,44 @@ import { useAppStore } from "@/stores";
 import { discoveryService } from "@/services/discovery";
 import type { DiscoveredServer } from "@/types/protocol";
 
-export function useServerDiscovery() {
+interface Options {
+  // Browse for as long as the caller is mounted.
+  autoStart?: boolean;
+}
+
+export function useServerDiscovery({ autoStart = false }: Options = {}) {
   const discovery = useAppStore((state) => state.discovery);
   const selectServer = useAppStore((state) => state.selectServer);
 
-  // Clean up on unmount
   useEffect(() => {
+    if (!autoStart) {
+      return;
+    }
+
+    discoveryService.startDiscovery();
+
     return () => {
       discoveryService.stopDiscovery();
     };
-  }, []);
+  }, [autoStart]);
 
-  const startDiscovery = useCallback(async () => {
-    await discoveryService.startDiscovery();
-  }, []);
-
-  const stopDiscovery = useCallback(() => {
-    discoveryService.stopDiscovery();
-  }, []);
-
-  const refresh = useCallback(async () => {
-    discoveryService.stopDiscovery();
-    await discoveryService.startDiscovery();
-  }, []);
-
-  const handleSelectServer = useCallback(
-    (server: DiscoveredServer) => {
-      selectServer(server);
-    },
-    [selectServer]
+  const startDiscovery = useCallback(() => discoveryService.startDiscovery(), []);
+  const stopDiscovery = useCallback(() => discoveryService.stopDiscovery(), []);
+  const refresh = useCallback(() => discoveryService.restartDiscovery(), []);
+  const buildUrl = useCallback(
+    (server: DiscoveredServer) => discoveryService.buildWebSocketUrl(server),
+    []
   );
 
-  const buildUrl = useCallback((server: DiscoveredServer): string => {
-    return discoveryService.buildWebSocketUrl(server);
-  }, []);
-
   return {
-    // State
     isSearching: discovery.isSearching,
     servers: discovery.discoveredServers,
     selectedServer: discovery.selectedServer,
 
-    // Actions
     startDiscovery,
     stopDiscovery,
     refresh,
-    selectServer: handleSelectServer,
+    selectServer,
     buildUrl,
   };
 }

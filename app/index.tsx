@@ -1,166 +1,238 @@
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { useConnection, useNFC, useAutoConnect } from "@/hooks";
+import { useCallback } from "react";
+import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { ConnectionStatus } from "@/components/ConnectionStatus";
+import { Notice } from "@/components/Notice";
 import { ScanButton } from "@/components/ScanButton";
-import { TagDrawer } from "@/components/TagDrawer";
+import { TAG_DRAWER_HEIGHT, TagDrawer } from "@/components/TagDrawer";
+import { colors, radius, shadows, spacing, typography } from "@/constants/theme";
+import { useAutoConnect, useConnection, useNFC, usePairing } from "@/hooks";
+
+/**
+ * What the reader is doing, as one answer rather than four overlapping
+ * booleans. Everything the screen says about NFC is keyed off this.
+ */
+type ReaderState = "unsupported" | "off" | "failed" | "starting" | "stalled" | "ready";
+
+const READER_HINT: Record<ReaderState, string> = {
+  unsupported: "This device has no NFC reader",
+  off: "Turn on NFC to scan",
+  failed: "The reader could not be started",
+  starting: "Starting the reader…",
+  stalled: "The reader is not running",
+  ready: "",
+};
 
 export default function ScannerScreen() {
   const router = useRouter();
-  const { status, serverUrl, deviceName, isRegistered } = useConnection();
-  const { isSearching } = useAutoConnect();
+  const {
+    status,
+    serverUrl,
+    deviceName,
+    isRegistered,
+    error,
+    reconnectAttempt,
+    retry: retryConnection,
+  } = useConnection();
+  const { isSearching, isOnline, retry: retryDiscovery } = useAutoConnect();
+  // Reads the stored credential once at start, so pairing and pin enforcement
+  // are known before anything is dialled.
+  usePairing();
+
   const {
     isSupported,
     isEnabled,
     isActive,
+    isInitialized,
     processingEnabled,
     lastTag,
+    scanHistory,
     toggleProcessing,
     clearLastTag,
-    initError
+    initError,
+    openSystemSettings,
+    canOpenSystemSettings,
   } = useNFC();
 
-  const handleToggleProcessing = () => {
-    if (!isSupported) {
-      Alert.alert("NFC Not Supported", "This device does not support NFC.");
-      return;
+  const readerState: ReaderState = initError
+    ? "failed"
+    : isSupported === false
+      ? "unsupported"
+      : isEnabled === false
+        ? "off"
+        : isActive
+          ? "ready"
+          : // Before initialisation finishes there is nothing wrong to report;
+            // after it, a reader that is still not running is worth saying.
+            isInitialized
+            ? "stalled"
+            : "starting";
+
+  const handleRetry = useCallback(() => {
+    // A known address is worth dialling again directly; without one, finding
+    // an agent is the only way back.
+    if (serverUrl) {
+      retryConnection().catch(() => {});
+    } else {
+      retryDiscovery();
     }
-
-    if (!isEnabled) {
-      Alert.alert(
-        "NFC Disabled",
-        "Please enable NFC in your device settings to scan tags."
-      );
-      return;
-    }
-
-    toggleProcessing();
-  };
-
-  const canToggle = isSupported && isEnabled && isActive;
+  }, [serverUrl, retryConnection, retryDiscovery]);
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.screen} edges={["top", "left", "right"]}>
       <View style={styles.header}>
-        <Text style={styles.title}>DAVI NFC Scanner</Text>
-        <TouchableOpacity
-          style={styles.settingsButton}
-          onPress={() => router.push("/settings")}
-        >
-          <Text style={styles.settingsIcon}>⚙</Text>
-        </TouchableOpacity>
+        <View>
+          <Text style={styles.title}>DAVI NFC</Text>
+          <Text style={styles.subtitle}>Remote tag reader</Text>
+        </View>
+
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={styles.iconButton}
+            onPress={() => router.push("/(modals)/history")}
+            accessibilityRole="button"
+            accessibilityLabel={`Scan history, ${scanHistory.length} kept`}
+          >
+            <Ionicons name="time-outline" size={20} color={colors.brand} />
+            {scanHistory.length > 0 && (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>
+                  {scanHistory.length > 99 ? "99+" : scanHistory.length}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.iconButton}
+            onPress={() => router.push("/settings")}
+            accessibilityRole="button"
+            accessibilityLabel="Settings"
+          >
+            <Ionicons name="settings-outline" size={20} color={colors.brand} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ConnectionStatus
         status={status}
         serverUrl={serverUrl}
         deviceName={deviceName}
+        error={error}
+        reconnectAttempt={reconnectAttempt}
         isSearching={isSearching}
+        isOnline={isOnline}
         onPress={() => router.push("/(modals)/server-list")}
+        onRetry={status === "error" && isOnline ? handleRetry : undefined}
       />
 
-      {initError && (
-        <View style={styles.errorBanner}>
-          <Text style={styles.errorText}>{initError}</Text>
-        </View>
-      )}
+      <View style={styles.notices}>
+        {readerState === "failed" && <Notice tone="danger" message={initError!} />}
 
-      <View style={styles.scanContainer}>
-        <ScanButton
-          onPress={handleToggleProcessing}
-          processingEnabled={processingEnabled}
-          disabled={!canToggle}
-        />
-        {isActive && processingEnabled && (
-          <Text style={styles.activeText}>
-            Hold device near NFC tag
-          </Text>
+        {readerState === "unsupported" && (
+          <Notice tone="danger" message="This device has no NFC reader, so it cannot scan tags." />
         )}
-        {isActive && !processingEnabled && (
-          <Text style={styles.pausedText}>
-            Scanning paused
-          </Text>
+
+        {readerState === "off" && (
+          <Notice
+            tone="warning"
+            message="NFC is switched off in system settings."
+            actionLabel={canOpenSystemSettings ? "Open settings" : undefined}
+            onAction={canOpenSystemSettings ? openSystemSettings : undefined}
+          />
         )}
-        {!isRegistered && status !== "disconnected" && (
-          <Text style={styles.warningText}>
-            Not registered - tags saved locally
-          </Text>
+
+        {readerState === "stalled" && (
+          <Notice tone="muted" message="The NFC reader is not running." />
+        )}
+
+        {readerState === "ready" && !isRegistered && status !== "disconnected" && (
+          <Notice tone="warning" message="Not registered yet — scans are kept on this device." />
         )}
       </View>
 
-      <TagDrawer tag={lastTag} onClear={clearLastTag} />
+      <View style={styles.scanArea}>
+        <ScanButton
+          onPress={toggleProcessing}
+          processingEnabled={processingEnabled}
+          disabled={readerState !== "ready"}
+          disabledReason={READER_HINT[readerState]}
+        />
+      </View>
+
+      <TagDrawer
+        tag={lastTag}
+        onClear={clearLastTag}
+        onPress={() => router.push("/(modals)/history")}
+      />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  screen: {
     flex: 1,
-    backgroundColor: "#F8FAFB",
+    backgroundColor: colors.background,
   },
   header: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 20,
-    paddingVertical: 16,
+    justifyContent: "space-between",
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.lg,
   },
   title: {
-    fontSize: 24,
-    fontWeight: "700",
-    color: "#1F4E5F",
-    letterSpacing: 0.5,
+    ...typography.screenTitle,
+    color: colors.brand,
   },
-  settingsButton: {
+  subtitle: {
+    ...typography.caption,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  headerActions: {
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
+  iconButton: {
     width: 40,
     height: 40,
-    borderRadius: 20,
-    backgroundColor: "#FFFFFF",
-    justifyContent: "center",
+    borderRadius: radius.pill,
+    backgroundColor: colors.surface,
     alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    elevation: 2,
+    justifyContent: "center",
+    ...shadows.card,
   },
-  settingsIcon: {
-    fontSize: 20,
-    color: "#1F4E5F",
+  badge: {
+    position: "absolute",
+    top: -2,
+    right: -2,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 4,
+    borderRadius: 9,
+    backgroundColor: colors.accent,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  errorBanner: {
-    backgroundColor: "#FEE2E2",
-    padding: 12,
-    marginHorizontal: 20,
-    marginTop: 12,
-    borderRadius: 12,
+  badgeText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: colors.textInverse,
   },
-  errorText: {
-    color: "#DC2626",
-    fontSize: 14,
+  notices: {
+    paddingHorizontal: spacing.lg,
+    gap: spacing.sm,
+    marginTop: spacing.md,
   },
-  scanContainer: {
+  scanArea: {
     flex: 1,
-    justifyContent: "center",
     alignItems: "center",
-    paddingBottom: 20,
-  },
-  activeText: {
-    marginTop: 24,
-    fontSize: 15,
-    color: "#00A4E4",
-    fontWeight: "500",
-  },
-  pausedText: {
-    marginTop: 24,
-    fontSize: 15,
-    color: "#6B7280",
-    fontWeight: "500",
-  },
-  warningText: {
-    marginTop: 8,
-    fontSize: 12,
-    color: "#F59E0B",
+    justifyContent: "center",
+    // Keeps the button clear of the drawer that floats over the bottom.
+    paddingBottom: TAG_DRAWER_HEIGHT + spacing.xxl,
   },
 });

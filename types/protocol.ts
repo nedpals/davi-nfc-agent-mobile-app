@@ -211,6 +211,19 @@ export interface AgentCredential {
   publicKeyPin: string;
 }
 
+// The part of a credential the UI may hold. The token is deliberately absent:
+// it is a bearer secret and the keychain is the only copy that should exist.
+export type PairingSummary = Omit<AgentCredential, "deviceToken">;
+
+export function toPairingSummary(credential: AgentCredential): PairingSummary {
+  return {
+    host: credential.host,
+    agentPort: credential.agentPort,
+    deviceID: credential.deviceID,
+    publicKeyPin: credential.publicKeyPin,
+  };
+}
+
 // Union types for type safety
 export type OutgoingMessage =
   | HelloMessage

@@ -26,6 +26,25 @@ import {
   type TagScannedPayload,
 } from "@/types/protocol";
 
+/**
+ * An error the agent reported, rather than one the transport produced.
+ *
+ * `retryable` is the field worth acting on: repeating a request the agent
+ * refused on its merits will be refused again, so the reconnect loop stops
+ * instead of spending its attempts on it.
+ */
+export class AgentError extends Error {
+  readonly code: string;
+  readonly retryable: boolean;
+
+  constructor(message: string, code: string, retryable: boolean) {
+    super(message);
+    this.name = "AgentError";
+    this.code = code;
+    this.retryable = retryable;
+  }
+}
+
 interface PendingRequest {
   resolve: (response: unknown) => void;
   reject: (error: Error) => void;
@@ -41,6 +60,9 @@ class WebSocketService {
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   private currentUrl: string | null = null;
   private isManualDisconnect = false;
+  // Settles the connect() call belonging to the live socket, so a connection
+  // that is torn down before it opens rejects instead of hanging.
+  private settleConnect: ((error?: Error) => void) | null = null;
 
   // What the agent agreed to speak. Set from the registration response rather
   // than from the subprotocol echo, because the first frame's type is what
@@ -58,8 +80,9 @@ class WebSocketService {
   }
 
   async connect(serverUrl: string): Promise<void> {
-    // Clean up existing connection
-    this.disconnect();
+    // Drop any previous socket without letting it drive the reconnect loop:
+    // this connection supersedes it.
+    this.teardown({ silent: true });
     this.isManualDisconnect = false;
 
     const store = useAppStore.getState();
@@ -69,7 +92,7 @@ class WebSocketService {
     // still accepts unless it was started with -require-paired-devices.
     const credential = await loadCredential();
     const secret = credential?.deviceToken || store.connection.apiSecret;
-    const wsUrl = buildDeviceUrl(serverUrl, { secret });
+    const wsUrl = buildDeviceUrl(serverUrl, { secret, port: credential?.agentPort });
 
     // Arm pinning before the socket is opened — it takes effect for connections
     // made after this point, not for one already in flight.
@@ -91,77 +114,116 @@ class WebSocketService {
     store.setServerUrl(serverUrl);
     store.setConnectionStatus("connecting");
     store.setConnectionError(null);
+    store.setManualDisconnect(false);
 
-    return new Promise((resolve, reject) => {
-      try {
-        this.ws = new WebSocket(wsUrl, [DEVICE_SUBPROTOCOL_V1]);
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
 
-        this.ws.onopen = () => {
-          // An agent that echoes nothing predates versioning, so fall back to
-          // the v0 registration frame rather than sending it a hello it will
-          // reject.
-          if (this.ws?.protocol !== DEVICE_SUBPROTOCOL_V1) {
-            this.offeredVersion = 0;
-          }
-
-          console.log(
-            "[WebSocket] Connected to",
-            serverUrl,
-            `(protocol v${this.offeredVersion})`,
-          );
-          this.reconnectAttempts = 0;
-          useAppStore.getState().setConnectionStatus("connected");
+      const settle = (error?: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timer) {
+          clearTimeout(timer);
+        }
+        if (this.settleConnect === settle) {
+          this.settleConnect = null;
+        }
+        if (error) {
+          reject(error);
+        } else {
           resolve();
-        };
+        }
+      };
 
-        this.ws.onmessage = (event) => {
-          this.handleMessage(event.data);
-        };
+      this.settleConnect = settle;
 
-        this.ws.onerror = (error) => {
-          console.error("[WebSocket] Error:", error);
-          // The agent rejects a bad or missing API secret before the upgrade,
-          // so auth failure arrives here as a handshake error rather than as a
-          // close frame or an error message on the socket.
-          const detail = (error as { message?: string } | undefined)?.message;
-          useAppStore
-            .getState()
-            .setConnectionError(detail || "WebSocket connection error");
-        };
-
-        this.ws.onclose = (event) => {
-          console.log("[WebSocket] Closed:", event.code, event.reason);
-          this.handleDisconnect();
-        };
-
-        // Connection timeout
-        setTimeout(() => {
-          if (this.ws?.readyState === WebSocket.CONNECTING) {
-            this.ws.close();
-            reject(new Error("Connection timeout"));
-          }
-        }, WS_CONFIG.REQUEST_TIMEOUT);
+      let socket: WebSocket;
+      try {
+        socket = new WebSocket(wsUrl, [DEVICE_SUBPROTOCOL_V1]);
       } catch (error) {
-        useAppStore.getState().setConnectionError(
-          error instanceof Error ? error.message : "Failed to connect"
-        );
-        reject(error);
+        const failure = error instanceof Error ? error : new Error("Failed to connect");
+        useAppStore.getState().failConnection(failure.message);
+        reject(failure);
+        return;
       }
+
+      this.ws = socket;
+
+      socket.onopen = () => {
+        // An agent that echoes nothing predates versioning, so fall back to
+        // the v0 registration frame rather than sending it a hello it will
+        // reject.
+        if (socket.protocol !== DEVICE_SUBPROTOCOL_V1) {
+          this.offeredVersion = 0;
+        }
+
+        console.log("[WebSocket] Connected to", serverUrl, `(protocol v${this.offeredVersion})`);
+        this.resetReconnect();
+        useAppStore.getState().setConnectionStatus("connected");
+        settle();
+      };
+
+      socket.onmessage = (event) => {
+        this.handleMessage(event.data);
+      };
+
+      socket.onerror = (error) => {
+        console.error("[WebSocket] Error:", error);
+        // The agent rejects a bad or missing API secret before the upgrade, so
+        // auth failure arrives here as a handshake error rather than as a close
+        // frame or an error message on the socket.
+        const detail = (error as { message?: string } | undefined)?.message;
+        useAppStore.getState().setConnectionError(detail || "WebSocket connection error");
+      };
+
+      socket.onclose = (event) => {
+        console.log("[WebSocket] Closed:", event.code, event.reason);
+        // A socket that closes before it ever opened has to reject the connect
+        // call itself; nothing else will, and the caller would wait forever.
+        settle(new Error(event.reason || "The agent closed the connection"));
+        this.handleDisconnect();
+      };
+
+      timer = setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        // Closing drives the usual disconnect path, so the reconnect loop picks
+        // this up like any other dropped connection.
+        socket.close();
+        settle(new Error("Connection timeout"));
+      }, WS_CONFIG.REQUEST_TIMEOUT);
     });
+  }
+
+  /** Connect and register in one step, which is what every caller wants. */
+  async connectAndRegister(serverUrl: string): Promise<void> {
+    await this.connect(serverUrl);
+
+    try {
+      await this.registerDevice();
+    } catch (error) {
+      if (error instanceof AgentError && !error.retryable) {
+        // The agent refused this device rather than failing to hear it, so
+        // retrying the identical registration cannot succeed.
+        this.stopReconnecting(error.message);
+      } else if (this.isConnected()) {
+        // The socket is still up but unusable without a device ID. Close it so
+        // the normal disconnect path decides whether to retry.
+        this.ws?.close();
+      }
+      throw error;
+    }
   }
 
   disconnect(): void {
     this.isManualDisconnect = true;
     this.sendGoodbye("device disconnected");
-    this.stopHeartbeat();
-    this.cancelReconnect();
-    this.clearPendingRequests();
-
-    if (this.ws) {
-      this.ws.onclose = null; // Prevent reconnection
-      this.ws.close();
-      this.ws = null;
-    }
+    this.resetReconnect();
+    this.teardown({ silent: true });
 
     useAppStore.getState().disconnect();
   }
@@ -199,20 +261,30 @@ class WebSocketService {
 
     const response = await this.sendRequest<RegisterDeviceResponse | HelloResponse>(message);
 
-    if (response.success) {
-      // Read the version back rather than assuming the request was honoured —
-      // the agent answers at its own maximum when asked for something newer.
-      this.negotiatedVersion =
-        response.type === "helloResponse" ? response.payload.protocolVersion : 0;
-
-      store.setDeviceId(response.payload.deviceID);
-      store.setRegistered(true);
-      store.setServerInfo(response.payload.serverInfo);
-      store.setProtocolVersion(this.negotiatedVersion);
-      store.setConnectionStatus("registered");
-      store.setLastConnected(new Date());
-      this.startHeartbeat();
+    // An unsuccessful response is not an error frame, so it would otherwise
+    // resolve and leave the app reading as connected but unregistered.
+    if (!response.success || !response.payload?.deviceID) {
+      throw new AgentError(
+        "The agent did not accept this device's registration.",
+        "REGISTRATION_REJECTED",
+        false,
+      );
     }
+
+    // Read the version back rather than assuming the request was honoured —
+    // the agent answers at its own maximum when asked for something newer.
+    this.negotiatedVersion =
+      response.type === "helloResponse" ? response.payload.protocolVersion : 0;
+
+    store.setDeviceId(response.payload.deviceID);
+    store.setRegistered(true);
+    store.setServerInfo(response.payload.serverInfo);
+    store.setProtocolVersion(this.negotiatedVersion);
+    store.setConnectionStatus("registered");
+    store.setConnectionError(null);
+    store.setLastConnected(new Date());
+    this.resetReconnect();
+    this.startHeartbeat();
 
     return response;
   }
@@ -253,8 +325,10 @@ class WebSocketService {
       },
     };
 
-    this.send(message);
-    store.markTagSent(tagData.uid);
+    // Only a frame that actually went out is worth showing as sent.
+    if (this.send(message)) {
+      store.markTagSent(tagData.uid);
+    }
   }
 
   sendTagRemoved(uid: string): void {
@@ -276,12 +350,10 @@ class WebSocketService {
     };
 
     this.send(message);
-    console.log("[WebSocket] Sent tagRemoved for uid:", uid);
   }
 
   private sendHeartbeat(): void {
-    const store = useAppStore.getState();
-    const deviceId = store.device.deviceId;
+    const deviceId = useAppStore.getState().device.deviceId;
 
     if (!deviceId || !this.isConnected()) {
       return;
@@ -312,69 +384,83 @@ class WebSocketService {
     }
   }
 
-  private send(message: BaseMessage): void {
+  private send(message: BaseMessage): boolean {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       console.error("[WebSocket] Cannot send: not connected");
-      return;
+      return false;
     }
 
     this.ws.send(JSON.stringify(message));
+    return true;
   }
 
-  private async sendRequest<T extends BaseMessage>(
-    message: BaseMessage
-  ): Promise<T> {
-    if (!message.id) {
-      message.id = this.generateRequestId();
-    }
+  private async sendRequest<T extends BaseMessage>(message: BaseMessage): Promise<T> {
+    const id = message.id ?? this.generateRequestId();
+    message.id = id;
 
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
-        this.pendingRequests.delete(message.id!);
-        reject(new Error(`Request ${message.id} timed out`));
+        this.pendingRequests.delete(id);
+        reject(new AgentError("The agent did not answer in time.", "TIMEOUT", true));
       }, WS_CONFIG.REQUEST_TIMEOUT);
 
-      this.pendingRequests.set(message.id!, {
+      this.pendingRequests.set(id, {
         resolve: resolve as (response: unknown) => void,
         reject,
         timeout,
       });
 
-      this.send(message);
+      if (!this.send(message)) {
+        clearTimeout(timeout);
+        this.pendingRequests.delete(id);
+        reject(new AgentError("Not connected to the agent.", "NOT_CONNECTED", true));
+      }
     });
   }
 
   private handleMessage(data: string): void {
+    let message: BaseMessage;
     try {
-      const message = JSON.parse(data) as BaseMessage;
-
-      // Check if this is a response to a pending request
-      if (message.id && this.pendingRequests.has(message.id)) {
-        const pending = this.pendingRequests.get(message.id)!;
-        clearTimeout(pending.timeout);
-        this.pendingRequests.delete(message.id);
-
-        if (message.type === "error") {
-          pending.reject(new Error((message as ErrorMessage).error));
-        } else {
-          pending.resolve(message);
-        }
-        return;
-      }
-
-      // Handle other message types
-      switch (message.type) {
-        case "error":
-          console.error("[WebSocket] Server error:", (message as ErrorMessage).error);
-          useAppStore.getState().setConnectionError((message as ErrorMessage).error);
-          break;
-
-        default:
-          console.log("[WebSocket] Unhandled message type:", message.type);
-      }
+      message = JSON.parse(data) as BaseMessage;
     } catch (error) {
       console.error("[WebSocket] Failed to parse message:", error);
+      return;
     }
+
+    const pending = message.id ? this.pendingRequests.get(message.id) : undefined;
+    if (pending && message.id) {
+      clearTimeout(pending.timeout);
+      this.pendingRequests.delete(message.id);
+
+      if (message.type === "error") {
+        pending.reject(this.toAgentError(message as ErrorMessage));
+      } else {
+        pending.resolve(message);
+      }
+      return;
+    }
+
+    switch (message.type) {
+      case "error": {
+        const agentError = this.toAgentError(message as ErrorMessage);
+        console.error("[WebSocket] Agent error:", agentError.code, agentError.message);
+        // Recorded, but not treated as losing the connection: the socket is
+        // still open and still registered.
+        useAppStore.getState().setConnectionError(agentError.message);
+        break;
+      }
+
+      default:
+        console.log("[WebSocket] Unhandled message type:", message.type);
+    }
+  }
+
+  private toAgentError(message: ErrorMessage): AgentError {
+    const code = message.payload?.code ?? "UNKNOWN";
+    // Absent means the agent predates the field; assuming it is retryable
+    // keeps a v0 agent behaving as it did before.
+    const retryable = message.payload?.retryable ?? true;
+    return new AgentError(message.error || code, code, retryable);
   }
 
   private handleDisconnect(): void {
@@ -390,23 +476,24 @@ class WebSocketService {
       return;
     }
 
-    // Attempt reconnection
-    if (this.reconnectAttempts < WS_CONFIG.RECONNECT.MAX_ATTEMPTS) {
-      this.scheduleReconnect();
-    } else {
-      store.setConnectionStatus("error");
-      store.setConnectionError("Max reconnection attempts reached");
-    }
+    this.scheduleReconnect();
   }
 
   private scheduleReconnect(): void {
-    // Don't schedule if already reconnecting or manually disconnected
-    if (this.reconnectTimeout || this.isManualDisconnect) {
+    if (this.reconnectTimeout || this.isManualDisconnect || !this.currentUrl) {
       return;
     }
 
     const store = useAppStore.getState();
+
+    if (this.reconnectAttempts >= WS_CONFIG.RECONNECT.MAX_ATTEMPTS) {
+      store.failConnection("Could not reach the agent. Tap to try again.");
+      return;
+    }
+
+    const attempt = this.reconnectAttempts + 1;
     store.setConnectionStatus("reconnecting");
+    store.setReconnectAttempt(attempt);
 
     const delay = Math.min(
       WS_CONFIG.RECONNECT.INITIAL_DELAY *
@@ -419,46 +506,74 @@ class WebSocketService {
     const finalDelay = delay + jitter;
 
     console.log(
-      `[WebSocket] Reconnecting in ${Math.round(finalDelay)}ms (attempt ${
-        this.reconnectAttempts + 1
-      }/${WS_CONFIG.RECONNECT.MAX_ATTEMPTS})`
+      `[WebSocket] Reconnecting in ${Math.round(finalDelay)}ms (attempt ${attempt}/${
+        WS_CONFIG.RECONNECT.MAX_ATTEMPTS
+      })`
     );
 
-    this.reconnectTimeout = setTimeout(async () => {
+    this.reconnectTimeout = setTimeout(() => {
       this.reconnectTimeout = null;
-      this.reconnectAttempts++;
+      // Counted here rather than in connect(), which resets the counter on a
+      // connection that actually opens.
+      this.reconnectAttempts = attempt;
 
-      if (this.currentUrl && !this.isManualDisconnect) {
-        try {
-          await this.connect(this.currentUrl);
-          await this.registerDevice();
-        } catch (error) {
-          console.error("[WebSocket] Reconnection failed:", error);
-          // If registration fails, stop reconnecting (likely a config issue)
-          const errorMsg = error instanceof Error ? error.message : String(error);
-          if (errorMsg.includes("Platform") || errorMsg.includes("Invalid")) {
-            console.error("[WebSocket] Registration error - stopping reconnection");
-            store.setConnectionStatus("error");
-            store.setConnectionError(errorMsg);
-            this.reconnectAttempts = WS_CONFIG.RECONNECT.MAX_ATTEMPTS; // Stop retrying
-          }
-        }
+      const url = this.currentUrl;
+      if (!url || this.isManualDisconnect) {
+        return;
       }
+
+      this.connectAndRegister(url).catch((error) => {
+        console.error("[WebSocket] Reconnection failed:", error);
+      });
     }, finalDelay);
   }
 
-  private cancelReconnect(): void {
+  /** Give up on the current URL until something asks for it again. */
+  private stopReconnecting(message: string): void {
+    this.cancelReconnectTimer();
+    this.reconnectAttempts = WS_CONFIG.RECONNECT.MAX_ATTEMPTS;
+    useAppStore.getState().failConnection(message);
+  }
+
+  private cancelReconnectTimer(): void {
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
     }
+  }
+
+  private resetReconnect(): void {
+    this.cancelReconnectTimer();
     this.reconnectAttempts = 0;
+    useAppStore.getState().setReconnectAttempt(0);
+  }
+
+  /**
+   * Drop the socket and everything hanging off it. A silent teardown detaches
+   * the close handler first, so the socket being replaced cannot restart the
+   * reconnect loop on its way out.
+   */
+  private teardown({ silent }: { silent: boolean }): void {
+    this.stopHeartbeat();
+    this.clearPendingRequests();
+    this.settleConnect?.(new Error("Connection replaced by a newer one"));
+
+    if (this.ws) {
+      if (silent) {
+        this.ws.onclose = null;
+        this.ws.onerror = null;
+        this.ws.onmessage = null;
+        this.ws.onopen = null;
+      }
+      this.ws.close();
+      this.ws = null;
+    }
   }
 
   private clearPendingRequests(): void {
-    for (const [id, pending] of this.pendingRequests) {
+    for (const pending of this.pendingRequests.values()) {
       clearTimeout(pending.timeout);
-      pending.reject(new Error("Connection closed"));
+      pending.reject(new AgentError("Connection closed.", "CONNECTION_CLOSED", true));
     }
     this.pendingRequests.clear();
   }
@@ -472,7 +587,24 @@ class WebSocketService {
   }
 
   isRegistered(): boolean {
-    return useAppStore.getState().device.isRegistered;
+    return this.isConnected() && useAppStore.getState().device.isRegistered;
+  }
+
+  /** Whether a dropped connection still has retries left. */
+  canRetry(): boolean {
+    return this.currentUrl !== null;
+  }
+
+  /** Start over from the last URL, clearing a spent retry budget. */
+  async retry(): Promise<void> {
+    const url = this.currentUrl ?? useAppStore.getState().connection.serverUrl;
+    if (!url) {
+      return;
+    }
+
+    this.resetReconnect();
+    this.isManualDisconnect = false;
+    await this.connectAndRegister(url);
   }
 }
 

@@ -13,6 +13,8 @@ interface BuildOptions {
   // Whether the agent is serving TLS. Consulted only when the input carries no
   // scheme of its own.
   tls?: boolean;
+  // Used when the input names no port of its own.
+  port?: number;
 }
 
 function splitOnce(value: string, separator: string): [string, string] {
@@ -24,15 +26,50 @@ function splitOnce(value: string, separator: string): [string, string] {
 }
 
 /**
+ * Split an authority into host and port, keeping an IPv6 literal intact: its
+ * colons are part of the address, and only a colon after the closing bracket
+ * introduces a port.
+ */
+function splitAuthority(authority: string): { host: string; port: string } {
+  if (authority.startsWith("[")) {
+    const end = authority.indexOf("]");
+    if (end !== -1) {
+      const rest = authority.slice(end + 1);
+      return {
+        host: authority.slice(1, end),
+        port: rest.startsWith(":") ? rest.slice(1) : "",
+      };
+    }
+  }
+
+  const colons = authority.split(":").length - 1;
+  if (colons > 1) {
+    // A bare IPv6 literal, written without the brackets a URL requires.
+    return { host: authority, port: "" };
+  }
+
+  const [host, port] = splitOnce(authority, ":");
+  return { host, port };
+}
+
+/** Wrap an IPv6 literal in the brackets a URL authority needs. */
+export function formatHost(host: string): string {
+  if (host.includes(":") && !host.startsWith("[")) {
+    return `[${host}]`;
+  }
+  return host;
+}
+
+/**
  * Build the device WebSocket URL the agent expects.
  *
  * Accepts anything from a bare `192.168.1.5:9470` to a full URL, and settles
- * the three things the agent cares about: the scheme, the `/ws` path, and the
- * `mode=device` discriminator that tells the shared port a device is calling
- * rather than a client.
+ * the four things the agent cares about: the scheme, the port, the `/ws` path,
+ * and the `mode=device` discriminator that tells the shared port a device is
+ * calling rather than a client.
  */
 export function buildDeviceUrl(input: string, options: BuildOptions = {}): string {
-  const { secret, tls } = options;
+  const { secret, tls, port } = options;
 
   let rest = input.trim();
   let scheme: "ws" | "wss";
@@ -51,10 +88,16 @@ export function buildDeviceUrl(input: string, options: BuildOptions = {}): strin
   const [beforeQuery, existingQuery] = splitOnce(rest, "?");
 
   const slash = beforeQuery.indexOf("/");
-  const authority = slash === -1 ? beforeQuery : beforeQuery.slice(0, slash);
+  const rawAuthority = slash === -1 ? beforeQuery : beforeQuery.slice(0, slash);
   const suppliedPath = slash === -1 ? "" : beforeQuery.slice(slash);
   const path =
     suppliedPath === "" || suppliedPath === "/" ? WS_CONFIG.DEFAULT_PATH : suppliedPath;
+
+  // An address with no port would otherwise fall through to 443, where the
+  // agent is not listening.
+  const { host, port: suppliedPort } = splitAuthority(rawAuthority);
+  const resolvedPort = suppliedPort || String(port ?? WS_CONFIG.DEFAULT_PORT);
+  const authority = host ? `${formatHost(host)}:${resolvedPort}` : "";
 
   const params = existingQuery
     .split("&")
@@ -78,9 +121,8 @@ export function hostFromAgentUrl(input: string): string {
   const [beforeQuery] = splitOnce(withoutScheme, "?");
   const slash = beforeQuery.indexOf("/");
   const authority = slash === -1 ? beforeQuery : beforeQuery.slice(0, slash);
-  const [host] = splitOnce(authority, ":");
 
-  return host;
+  return splitAuthority(authority).host;
 }
 
 /**
@@ -89,5 +131,5 @@ export function hostFromAgentUrl(input: string): string {
  * cannot verify a TLS connection to it.
  */
 export function buildBootstrapUrl(input: string): string {
-  return `http://${hostFromAgentUrl(input)}:${WS_CONFIG.BOOTSTRAP_PORT}/`;
+  return `http://${formatHost(hostFromAgentUrl(input))}:${WS_CONFIG.BOOTSTRAP_PORT}/`;
 }
