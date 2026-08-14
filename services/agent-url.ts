@@ -69,16 +69,25 @@ export function buildDeviceUrl(input: string, options: BuildOptions = {}): strin
 }
 
 /**
- * The agent's CA bootstrap page, which hands out the certificate a phone has to
- * trust before `wss://` will complete. Served over plain HTTP on its own port,
- * because a device that does not yet trust the CA cannot fetch it over TLS.
+ * The bare host out of anything that addresses the agent — scheme, port, path
+ * and query stripped. Pairing needs it because it runs on a different port from
+ * the WebSocket endpoint.
  */
-export function buildBootstrapUrl(input: string): string {
+export function hostFromAgentUrl(input: string): string {
   const withoutScheme = input.trim().replace(SCHEME_RE, "");
   const [beforeQuery] = splitOnce(withoutScheme, "?");
   const slash = beforeQuery.indexOf("/");
   const authority = slash === -1 ? beforeQuery : beforeQuery.slice(0, slash);
   const [host] = splitOnce(authority, ":");
 
-  return `http://${host}:${WS_CONFIG.BOOTSTRAP_PORT}/install`;
+  return host;
+}
+
+/**
+ * The agent's pairing page, where the PIN is shown. Served over plain HTTP on
+ * its own port, because a device that does not yet hold the agent's key pin
+ * cannot verify a TLS connection to it.
+ */
+export function buildBootstrapUrl(input: string): string {
+  return `http://${hostFromAgentUrl(input)}:${WS_CONFIG.BOOTSTRAP_PORT}/`;
 }

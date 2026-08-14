@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -12,10 +12,12 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import * as WebBrowser from "expo-web-browser";
 import { useConnection } from "@/hooks";
-import { buildBootstrapUrl } from "@/services/agent-url";
+import { hostFromAgentUrl } from "@/services/agent-url";
+import { clearCredential, loadCredential, saveCredential } from "@/services/credentials";
+import { pairWithAgent } from "@/services/pairing";
 import { useAppStore } from "@/stores";
+import type { AgentCredential } from "@/types/protocol";
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -39,7 +41,60 @@ export default function SettingsScreen() {
   const [urlInput, setUrlInput] = useState(serverUrl || "");
   const [nameInput, setNameInput] = useState(deviceName);
   const [secretInput, setSecretInput] = useState(apiSecret || "");
+  const [pinInput, setPinInput] = useState("");
+  const [credential, setCredential] = useState<AgentCredential | null>(null);
+  const [isPairing, setIsPairing] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
+
+  const setPaired = useAppStore((state) => state.setPaired);
+
+  useEffect(() => {
+    loadCredential().then((stored) => {
+      setCredential(stored);
+      setPaired(stored !== null);
+    });
+  }, [setPaired]);
+
+  const handlePair = async () => {
+    const host = hostFromAgentUrl(urlInput);
+    if (!host) {
+      Alert.alert("Enter the agent's address first", "Pairing needs to know which agent to ask.");
+      return;
+    }
+    if (!pinInput.trim()) {
+      Alert.alert("Enter the PIN", "The agent shows a six-digit PIN in its tray menu and logs.");
+      return;
+    }
+
+    setIsPairing(true);
+    try {
+      const paired = await pairWithAgent(host, pinInput.trim(), nameInput.trim() || deviceName);
+      await saveCredential(paired);
+      setCredential(paired);
+      setPaired(true);
+      setPinInput("");
+      Alert.alert(
+        "Paired",
+        paired.publicKeyPin
+          ? "This device has its own credential and knows the agent's key."
+          : "This device has its own credential. The agent is serving without TLS.",
+      );
+    } catch (error) {
+      Alert.alert("Pairing failed", error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsPairing(false);
+    }
+  };
+
+  const handleUnpair = async () => {
+    await clearCredential();
+    setCredential(null);
+    setPaired(false);
+    Alert.alert(
+      "Unpaired",
+      "The credential was removed from this device. Revoke it from the agent's tray as well if it should stop working there.",
+    );
+  };
 
   const handleConnect = async () => {
     if (!urlInput.trim()) {
@@ -62,19 +117,6 @@ export default function SettingsScreen() {
       );
     } finally {
       setIsConnecting(false);
-    }
-  };
-
-  const handleInstallCertificate = async () => {
-    if (!urlInput.trim()) {
-      Alert.alert("Enter a server first", "The certificate is served by the agent.");
-      return;
-    }
-
-    try {
-      await WebBrowser.openBrowserAsync(buildBootstrapUrl(urlInput));
-    } catch {
-      Alert.alert("Could not open", "Open the agent's install page in a browser.");
     }
   };
 
@@ -151,15 +193,15 @@ export default function SettingsScreen() {
               style={[styles.input, styles.stackedInput]}
               value={secretInput}
               onChangeText={setSecretInput}
-              placeholder="API secret"
+              placeholder="Shared API secret (only if not paired)"
               placeholderTextColor="#9CA3AF"
               autoCapitalize="none"
               autoCorrect={false}
               secureTextEntry
             />
             <Text style={styles.hint}>
-              The agent generates one on first run and shows it in its tray menu.
-              Leave empty only if it was started with an empty -api-secret.
+              Pairing below replaces this. The shared secret still works, but
+              rotating it logs out every device at once.
             </Text>
 
             <View style={styles.buttonRow}>
@@ -181,19 +223,73 @@ export default function SettingsScreen() {
                   </Text>
                 </TouchableOpacity>
               )}
-              <TouchableOpacity
-                style={[styles.button, styles.secondaryButton]}
-                onPress={handleInstallCertificate}
-              >
-                <Text style={styles.secondaryButtonText}>
-                  Install agent certificate
-                </Text>
-              </TouchableOpacity>
             </View>
-            <Text style={styles.hint}>
-              A wss:// connection fails until this phone trusts the certificate
-              the agent generated.
-            </Text>
+          </View>
+
+          {/* Pairing Section */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Pairing</Text>
+
+            {credential ? (
+              <>
+                <View style={styles.infoRow}>
+                  <Text style={styles.infoLabel}>Paired with</Text>
+                  <Text style={styles.infoValue}>{credential.host}</Text>
+                </View>
+                <View style={styles.infoRow}>
+                  <Text style={styles.infoLabel}>Device ID</Text>
+                  <Text style={styles.infoValue}>{credential.deviceID}</Text>
+                </View>
+                <View style={styles.infoRow}>
+                  <Text style={styles.infoLabel}>Agent key pin</Text>
+                  <Text style={styles.infoValue}>
+                    {credential.publicKeyPin || "None — agent serves no TLS"}
+                  </Text>
+                </View>
+                <View style={styles.buttonRow}>
+                  <TouchableOpacity
+                    style={[styles.button, styles.disconnectButton]}
+                    onPress={handleUnpair}
+                  >
+                    <Text style={styles.disconnectButtonText}>Unpair</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : (
+              <>
+                <TextInput
+                  style={styles.input}
+                  value={pinInput}
+                  onChangeText={setPinInput}
+                  placeholder="Six-digit PIN"
+                  placeholderTextColor="#9CA3AF"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="number-pad"
+                  maxLength={6}
+                />
+                <Text style={styles.hint}>
+                  The agent shows the PIN in its tray menu, its logs, and its
+                  pairing page. Five wrong attempts lock pairing until it
+                  restarts.
+                </Text>
+                <View style={styles.buttonRow}>
+                  <TouchableOpacity
+                    style={[styles.button, styles.connectButton]}
+                    onPress={handlePair}
+                    disabled={isPairing}
+                  >
+                    <Text style={styles.connectButtonText}>
+                      {isPairing ? "Pairing..." : "Pair with agent"}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.hint}>
+                  Pairing gives this device its own credential, revocable on its
+                  own from the agent&apos;s tray.
+                </Text>
+              </>
+            )}
           </View>
 
           {/* Device Info Section */}
