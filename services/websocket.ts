@@ -22,9 +22,25 @@ import {
   type TagScannedMessage,
   type TagRemovedMessage,
   type DeviceHeartbeatMessage,
+  type DeviceWriteRequestMessage,
+  type DeviceWriteRequestPayload,
+  type DeviceWriteResponsePayload,
   type ErrorMessage,
   type TagScannedPayload,
 } from "@/types/protocol";
+
+/**
+ * Performs a write and reports the outcome. Registered by the NFC service,
+ * which owns the radio and the tag currently in the field.
+ */
+export type WriteHandler = (
+  requestID: string,
+  payload: DeviceWriteRequestPayload,
+) => Promise<DeviceWriteResponsePayload>;
+
+// How many idempotency keys to remember. A write is answered in seconds, so
+// this only has to outlive a dropped connection and its retry.
+const APPLIED_WRITE_HISTORY = 32;
 
 /**
  * An error the agent reported, rather than one the transport produced.
@@ -69,6 +85,11 @@ class WebSocketService {
   // actually selects the dialect.
   private offeredVersion: ProtocolVersion = 0;
   private negotiatedVersion: ProtocolVersion = 0;
+
+  private writeHandler: WriteHandler | null = null;
+  // Outcomes keyed by idempotencyKey, so a repeated request reports what
+  // happened the first time instead of writing the tag again.
+  private appliedWrites = new Map<string, DeviceWriteResponsePayload>();
 
   private constructor() {}
 
@@ -450,8 +471,108 @@ class WebSocketService {
         break;
       }
 
+      case "deviceWriteRequest":
+        // Deliberately not awaited: the agent allows 20s for a write, and
+        // blocking the socket reader for that long would stall heartbeats and
+        // any other frame behind it.
+        void this.handleWriteRequest(message as DeviceWriteRequestMessage);
+        break;
+
       default:
         console.log("[WebSocket] Unhandled message type:", message.type);
+    }
+  }
+
+  /**
+   * Carry out a write the agent asked for and report what happened.
+   *
+   * Always answers, including when it refuses: the agent is holding a request
+   * open with a 20 second deadline, and a silent device turns a clear refusal
+   * into a timeout.
+   */
+  private async handleWriteRequest(message: DeviceWriteRequestMessage): Promise<void> {
+    const payload = message.payload;
+    const requestID = payload?.requestID ?? message.id ?? "";
+    const key = payload?.idempotencyKey;
+
+    const previous = key ? this.appliedWrites.get(key) : undefined;
+    if (previous) {
+      // The same logical write arriving twice means the first response was
+      // lost, not that the tag should be written again.
+      console.log("[WebSocket] Replaying earlier outcome for write", key);
+      this.send({
+        id: message.id,
+        type: "deviceWriteResponse",
+        payload: { ...previous, requestID },
+      });
+      return;
+    }
+
+    const result = await this.performWrite(requestID, payload);
+
+    if (key) {
+      this.rememberWrite(key, result);
+    }
+
+    this.send({ id: message.id, type: "deviceWriteResponse", payload: result });
+  }
+
+  /**
+   * Register what actually performs a write.
+   *
+   * The NFC service registers itself rather than being imported here: it
+   * already depends on this module to send what it scans, and importing it back
+   * would close a cycle between the two.
+   */
+  setWriteHandler(handler: WriteHandler | null): void {
+    this.writeHandler = handler;
+  }
+
+  private async performWrite(
+    requestID: string,
+    payload: DeviceWriteRequestPayload | undefined,
+  ): Promise<DeviceWriteResponsePayload> {
+    if (!payload) {
+      return {
+        requestID,
+        success: false,
+        error: "Write request carried no payload",
+        errorCode: "INVALID_DATA",
+      };
+    }
+
+    if (!this.writeHandler) {
+      return {
+        requestID,
+        success: false,
+        error: "This device cannot write tags",
+        errorCode: "NOT_SUPPORTED",
+      };
+    }
+
+    try {
+      return await this.writeHandler(requestID, payload);
+    } catch (error) {
+      // A handler that throws is still an outcome the agent needs to hear.
+      return {
+        requestID,
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+        errorCode: "WRITE_FAILED",
+      };
+    }
+  }
+
+  /** Bounded, because a long-lived connection would otherwise accumulate keys. */
+  private rememberWrite(key: string, result: DeviceWriteResponsePayload): void {
+    this.appliedWrites.set(key, result);
+
+    while (this.appliedWrites.size > APPLIED_WRITE_HISTORY) {
+      const oldest = this.appliedWrites.keys().next().value;
+      if (oldest === undefined) {
+        break;
+      }
+      this.appliedWrites.delete(oldest);
     }
   }
 

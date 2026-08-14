@@ -406,3 +406,107 @@ describe("agent errors outside a request", () => {
     expect(connection.status).toBe("registered");
   });
 });
+
+describe("write requests from the agent", () => {
+  /** Deliver a deviceWriteRequest and return what the device sent back. */
+  async function requestWrite(
+    socket: FakeWebSocket,
+    payload: Record<string, unknown>,
+    id = "srv_1"
+  ) {
+    const before = socket.sent.length;
+    socket.reply({ id, type: "deviceWriteRequest", payload });
+    await waitFor(() => socket.sent.length > before);
+    return socket.lastMessage();
+  }
+
+  afterEach(() => {
+    websocketService.setWriteHandler(null);
+  });
+
+  it("answers NOT_SUPPORTED when nothing can write", async () => {
+    const socket = await openConnection();
+    websocketService.setWriteHandler(null);
+
+    const reply = await requestWrite(socket, { requestID: "w1", deviceID: "device-123" });
+
+    expect(reply.type).toBe("deviceWriteResponse");
+    expect(reply.payload).toMatchObject({
+      requestID: "w1",
+      success: false,
+      errorCode: "NOT_SUPPORTED",
+    });
+  });
+
+  it("passes the request to the registered handler and reports its outcome", async () => {
+    const socket = await openConnection();
+    const handler = jest.fn(async (requestID: string) => ({ requestID, success: true }));
+    websocketService.setWriteHandler(handler);
+
+    const reply = await requestWrite(socket, {
+      requestID: "w2",
+      deviceID: "device-123",
+      ndefBytes: "0QEBVAI=",
+    });
+
+    expect(handler).toHaveBeenCalledWith("w2", expect.objectContaining({ ndefBytes: "0QEBVAI=" }));
+    expect(reply.payload).toMatchObject({ requestID: "w2", success: true });
+  });
+
+  it("replays the first outcome rather than writing twice for one idempotency key", async () => {
+    const socket = await openConnection();
+    const handler = jest.fn(async (requestID: string) => ({ requestID, success: true }));
+    websocketService.setWriteHandler(handler);
+
+    await requestWrite(socket, {
+      requestID: "w3",
+      deviceID: "device-123",
+      idempotencyKey: "key-1",
+    });
+    const second = await requestWrite(
+      socket,
+      { requestID: "w4", deviceID: "device-123", idempotencyKey: "key-1" },
+      "srv_2"
+    );
+
+    // The tag is written once; the repeat is a lost response, not a second write.
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(second.payload).toMatchObject({ success: true, requestID: "w4" });
+  });
+
+  it("treats a different idempotency key as a separate write", async () => {
+    const socket = await openConnection();
+    const handler = jest.fn(async (requestID: string) => ({ requestID, success: true }));
+    websocketService.setWriteHandler(handler);
+
+    await requestWrite(socket, {
+      requestID: "w5",
+      deviceID: "device-123",
+      idempotencyKey: "key-a",
+    });
+    await requestWrite(
+      socket,
+      { requestID: "w6", deviceID: "device-123", idempotencyKey: "key-b" },
+      "srv_2"
+    );
+
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it("still answers when the handler throws", async () => {
+    const socket = await openConnection();
+    websocketService.setWriteHandler(async () => {
+      throw new Error("radio exploded");
+    });
+
+    const reply = await requestWrite(socket, { requestID: "w7", deviceID: "device-123" });
+
+    // Silence would leave the agent waiting out its 20 second deadline.
+    expect(reply.payload).toMatchObject({
+      requestID: "w7",
+      success: false,
+      errorCode: "WRITE_FAILED",
+      error: "radio exploded",
+    });
+  });
+});
