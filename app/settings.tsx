@@ -12,7 +12,9 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
+import * as WebBrowser from "expo-web-browser";
 import { useConnection } from "@/hooks";
+import { buildBootstrapUrl } from "@/services/agent-url";
 import { useAppStore } from "@/stores";
 
 export default function SettingsScreen() {
@@ -30,10 +32,13 @@ export default function SettingsScreen() {
   } = useConnection();
 
   const setDeviceName = useAppStore((state) => state.setDeviceName);
+  const setApiSecret = useAppStore((state) => state.setApiSecret);
   const device = useAppStore((state) => state.device);
+  const apiSecret = useAppStore((state) => state.connection.apiSecret);
 
   const [urlInput, setUrlInput] = useState(serverUrl || "");
   const [nameInput, setNameInput] = useState(deviceName);
+  const [secretInput, setSecretInput] = useState(apiSecret || "");
   const [isConnecting, setIsConnecting] = useState(false);
 
   const handleConnect = async () => {
@@ -42,19 +47,13 @@ export default function SettingsScreen() {
       return;
     }
 
-    let url = urlInput.trim();
-    // Add ws:// prefix if missing
-    if (!url.startsWith("ws://") && !url.startsWith("wss://")) {
-      url = `ws://${url}`;
-    }
-    // Add /ws path if missing
-    if (!url.includes("/ws")) {
-      url = `${url}/ws`;
-    }
+    // Commit the secret before dialling, since the connection reads it from
+    // the store rather than from this screen.
+    setApiSecret(secretInput.trim() || null);
 
     setIsConnecting(true);
     try {
-      await connect(url);
+      await connect(urlInput.trim());
       Alert.alert("Connected", "Successfully connected to server");
     } catch (error) {
       Alert.alert(
@@ -63,6 +62,19 @@ export default function SettingsScreen() {
       );
     } finally {
       setIsConnecting(false);
+    }
+  };
+
+  const handleInstallCertificate = async () => {
+    if (!urlInput.trim()) {
+      Alert.alert("Enter a server first", "The certificate is served by the agent.");
+      return;
+    }
+
+    try {
+      await WebBrowser.openBrowserAsync(buildBootstrapUrl(urlInput));
+    } catch {
+      Alert.alert("Could not open", "Open the agent's install page in a browser.");
     }
   };
 
@@ -124,12 +136,32 @@ export default function SettingsScreen() {
               style={styles.input}
               value={urlInput}
               onChangeText={setUrlInput}
-              placeholder="ws://192.168.1.100:8080/ws"
+              placeholder="192.168.1.100:9470"
               placeholderTextColor="#9CA3AF"
               autoCapitalize="none"
               autoCorrect={false}
               keyboardType="url"
             />
+            <Text style={styles.hint}>
+              Connects over wss://. Prefix with ws:// for an agent started with
+              -auto-tls=false.
+            </Text>
+
+            <TextInput
+              style={[styles.input, styles.stackedInput]}
+              value={secretInput}
+              onChangeText={setSecretInput}
+              placeholder="API secret"
+              placeholderTextColor="#9CA3AF"
+              autoCapitalize="none"
+              autoCorrect={false}
+              secureTextEntry
+            />
+            <Text style={styles.hint}>
+              The agent generates one on first run and shows it in its tray menu.
+              Leave empty only if it was started with an empty -api-secret.
+            </Text>
+
             <View style={styles.buttonRow}>
               {isConnected ? (
                 <TouchableOpacity
@@ -149,7 +181,19 @@ export default function SettingsScreen() {
                   </Text>
                 </TouchableOpacity>
               )}
+              <TouchableOpacity
+                style={[styles.button, styles.secondaryButton]}
+                onPress={handleInstallCertificate}
+              >
+                <Text style={styles.secondaryButtonText}>
+                  Install agent certificate
+                </Text>
+              </TouchableOpacity>
             </View>
+            <Text style={styles.hint}>
+              A wss:// connection fails until this phone trusts the certificate
+              the agent generated.
+            </Text>
           </View>
 
           {/* Device Info Section */}
@@ -261,8 +305,18 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontWeight: "600",
   },
+  stackedInput: {
+    marginTop: 12,
+  },
+  hint: {
+    fontSize: 12,
+    color: "#6B7280",
+    marginTop: 6,
+    lineHeight: 16,
+  },
   buttonRow: {
     marginTop: 12,
+    gap: 8,
   },
   button: {
     borderRadius: 12,
@@ -282,6 +336,14 @@ const styles = StyleSheet.create({
   },
   disconnectButtonText: {
     color: "#DC2626",
+    fontWeight: "600",
+    fontSize: 16,
+  },
+  secondaryButton: {
+    backgroundColor: "#F3F4F6",
+  },
+  secondaryButtonText: {
+    color: "#374151",
     fontWeight: "600",
     fontSize: 16,
   },

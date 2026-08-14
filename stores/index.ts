@@ -14,6 +14,9 @@ import { APP_VERSION, getDeviceName } from "@/constants/config";
 interface ConnectionState {
   status: ConnectionStatus;
   serverUrl: string | null;
+  // The agent's API secret. It generates one on first run, so a device on the
+  // LAN is rejected at the handshake without it.
+  apiSecret: string | null;
   error: string | null;
   lastConnected: Date | null;
   serverInfo: ServerInfo | null;
@@ -51,6 +54,7 @@ interface AppStore {
   connection: ConnectionState;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setServerUrl: (url: string | null) => void;
+  setApiSecret: (secret: string | null) => void;
   setConnectionError: (error: string | null) => void;
   setLastConnected: (date: Date | null) => void;
   setServerInfo: (info: ServerInfo | null) => void;
@@ -90,6 +94,7 @@ interface AppStore {
 const initialConnectionState: ConnectionState = {
   status: "disconnected",
   serverUrl: null,
+  apiSecret: null,
   error: null,
   lastConnected: null,
   serverInfo: null,
@@ -136,6 +141,10 @@ export const useAppStore = create<AppStore>()(
       setServerUrl: (serverUrl) =>
         set((state) => ({
           connection: { ...state.connection, serverUrl },
+        })),
+      setApiSecret: (apiSecret) =>
+        set((state) => ({
+          connection: { ...state.connection, apiSecret },
         })),
       setConnectionError: (error) =>
         set((state) => ({
@@ -273,6 +282,7 @@ export const useAppStore = create<AppStore>()(
           connection: {
             ...initialConnectionState,
             serverUrl: state.connection.serverUrl,
+            apiSecret: state.connection.apiSecret,
             lastConnected: state.connection.lastConnected,
           },
           device: {
@@ -288,6 +298,7 @@ export const useAppStore = create<AppStore>()(
       partialize: (state) => ({
         connection: {
           serverUrl: state.connection.serverUrl,
+          apiSecret: state.connection.apiSecret,
           lastConnected: state.connection.lastConnected,
         },
         device: {

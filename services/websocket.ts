@@ -44,8 +44,11 @@ class WebSocketService {
     this.isManualDisconnect = false;
 
     const store = useAppStore.getState();
-    const wsUrl = buildDeviceUrl(serverUrl);
+    const wsUrl = buildDeviceUrl(serverUrl, { secret: store.connection.apiSecret });
 
+    // Hold the caller's URL rather than the dialled one: the dialled URL
+    // carries the API secret, and this is what gets persisted and reused on
+    // reconnect.
     this.currentUrl = serverUrl;
 
     store.setServerUrl(serverUrl);
