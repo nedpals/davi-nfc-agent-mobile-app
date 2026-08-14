@@ -8,6 +8,7 @@ import {
 } from "@/constants/config";
 import { buildDeviceUrl } from "@/services/agent-url";
 import { loadCredential } from "@/services/credentials";
+import { applyPinning } from "@/services/pinning";
 import { useAppStore } from "@/stores";
 import {
   DEVICE_SUBPROTOCOL_V1,
@@ -69,6 +70,16 @@ class WebSocketService {
     const credential = await loadCredential();
     const secret = credential?.deviceToken || store.connection.apiSecret;
     const wsUrl = buildDeviceUrl(serverUrl, { secret });
+
+    // Arm pinning before the socket is opened — it takes effect for connections
+    // made after this point, not for one already in flight.
+    const pinning = applyPinning(credential);
+    store.setPinningState(pinning.status);
+    if (pinning.status === "unavailable") {
+      console.warn(
+        "[WebSocket] This build cannot verify the agent's key pin. The connection is not authenticated against it.",
+      );
+    }
 
     // Hold the caller's URL rather than the dialled one: the dialled URL
     // carries the credential, and this is what gets persisted and reused on

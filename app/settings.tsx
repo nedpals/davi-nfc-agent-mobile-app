@@ -47,6 +47,7 @@ export default function SettingsScreen() {
   const [isConnecting, setIsConnecting] = useState(false);
 
   const setPaired = useAppStore((state) => state.setPaired);
+  const pinningState = useAppStore((state) => state.connection.pinningState);
 
   useEffect(() => {
     loadCredential().then((stored) => {
@@ -244,6 +245,16 @@ export default function SettingsScreen() {
                   <Text style={styles.infoLabel}>Agent key pin</Text>
                   <Text style={styles.infoValue}>
                     {credential.publicKeyPin || "None — agent serves no TLS"}
+                  </Text>
+                </View>
+                <View style={styles.infoRow}>
+                  <Text style={styles.infoLabel}>Pin enforced</Text>
+                  <Text style={styles.infoValue}>
+                    {pinningState === "pinned"
+                      ? "Yes"
+                      : pinningState === "unavailable"
+                        ? "No — this build cannot verify it"
+                        : "Not applicable"}
                   </Text>
                 </View>
                 <View style={styles.buttonRow}>

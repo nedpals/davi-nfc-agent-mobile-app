@@ -52,25 +52,46 @@ self-signed certificate from a persistent key, and a device is supposed to
 recognize it by pinning `publicKeyPin` — which survives certificate reissue, so
 the pin outlives the certificate.
 
-> **Not yet implemented.** React Native's WebSocket exposes no hook for
-> certificate verification, so the pin is stored but not yet checked, and a
-> `wss://` connection to a self-signed agent will fail. Until native trust
-> evaluation lands on both platforms, run the agent with `-auto-tls=false` and
-> connect over `ws://`. See [Verifying the pin](#verifying-the-pin).
+> **Written but never built.** The pinning module below has not been compiled or
+> run — it was authored in an environment with no Android SDK and no Xcode. Treat
+> the first device build as the real test.
 
 ## Verifying the pin
 
-Closing this needs a native module per platform, because RN's WebSocket does not
-surface the server trust decision to JavaScript. The agent's
-[device setup guide](https://github.com/dotside-studios/davi-nfc-agent/blob/master/docs/device-setup.md)
-carries working implementations and both traps worth knowing:
+`modules/agent-pinning` is a local Expo module that enforces the pin, because
+React Native does not surface the server trust decision to JavaScript. Both
+platforms need native code, and each has a trap that makes the wrong approach
+look plausible.
 
-- **Android** — supply a custom `X509TrustManager`. OkHttp's `CertificatePinner`
-  does not work here: it runs after chain validation, so a self-signed
-  certificate is rejected before the pin is consulted.
-- **iOS** — handle the server-trust challenge in `URLSessionDelegate`.
-  `SecKeyCopyExternalRepresentation` returns the raw key rather than SPKI DER, so
-  it needs the ASN.1 header prepended before hashing or it can never match.
+**Android** — the pin is checked by a custom `X509TrustManager`; OkHttp's
+`CertificatePinner` runs after chain validation, so it would reject a
+self-signed certificate before the pin was consulted. Installing the trust
+manager needs `WebSocketModule.setCustomClientBuilder`, **not**
+`OkHttpClientProvider`: the provider covers `fetch` and XHR, while RN's
+WebSocket module builds an `OkHttpClient` of its own
+([facebook/react-native#18920](https://github.com/facebook/react-native/issues/18920)).
+`PublicKey.getEncoded()` is already SPKI DER.
+
+**iOS** — RN's WebSocket is SocketRocket, not `NSURLSession`, so the
+`URLSessionDelegate` server-trust challenge never fires and TrustKit-based
+libraries cannot see the connection. The reachable hook is
+`SRSecurityPolicy.evaluateServerTrust:forDomain:`, and the policy has to be
+built with chain validation **off** — `SRSecurityPolicy` applies it to the
+stream via `kCFStreamSSLValidatesCertificateChain`, so leaving it on rejects the
+self-signed certificate before the pin is consulted, exactly as
+`CertificatePinner` does on Android. The key pin replaces the chain as the
+identity check. `SecKeyCopyExternalRepresentation` returns the raw key rather
+than SPKI DER, so the 26-byte ASN.1 P-256 header is prepended before hashing.
+
+Since RN offers no injection point on iOS, the module swizzles
+`-[SRWebSocket initWithURLRequest:protocols:]` onto the `securityPolicy:`
+variant. That avoids forking React Native or replacing its WebSocket module, at
+the cost of depending on an initializer signature RN could change.
+
+**When it cannot be enforced** — in Expo Go, or any build without the module,
+`applyPinning` reports `unavailable`. The connection is still made and is *not*
+verified; Settings says so, and the socket layer logs a warning rather than
+letting it read as secure.
 
 ## Protocol
 

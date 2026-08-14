@@ -27,6 +27,10 @@ interface ConnectionState {
   // Set once the device holds its own paired credential, so the UI can stop
   // asking for the shared secret.
   isPaired: boolean;
+  // Whether the agent's key pin is actually being enforced on this connection.
+  // "unavailable" means a pin is held but this build cannot check it, which is
+  // worth showing rather than letting the connection read as verified.
+  pinningState: "pinned" | "not-applicable" | "unavailable";
 }
 
 // Device state slice
@@ -64,6 +68,7 @@ interface AppStore {
   setApiSecret: (secret: string | null) => void;
   setProtocolVersion: (version: ProtocolVersion) => void;
   setPaired: (paired: boolean) => void;
+  setPinningState: (state: ConnectionState["pinningState"]) => void;
   setConnectionError: (error: string | null) => void;
   setLastConnected: (date: Date | null) => void;
   setServerInfo: (info: ServerInfo | null) => void;
@@ -109,6 +114,7 @@ const initialConnectionState: ConnectionState = {
   serverInfo: null,
   protocolVersion: 0,
   isPaired: false,
+  pinningState: "not-applicable",
 };
 
 // Ensure platform is always 'ios' or 'android'
@@ -164,6 +170,10 @@ export const useAppStore = create<AppStore>()(
       setPaired: (isPaired) =>
         set((state) => ({
           connection: { ...state.connection, isPaired },
+        })),
+      setPinningState: (pinningState) =>
+        set((state) => ({
+          connection: { ...state.connection, pinningState },
         })),
       setConnectionError: (error) =>
         set((state) => ({
