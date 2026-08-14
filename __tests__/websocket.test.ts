@@ -510,3 +510,83 @@ describe("write requests from the agent", () => {
     });
   });
 });
+
+describe("transceive requests from the agent", () => {
+  async function requestTransceive(
+    socket: FakeWebSocket,
+    payload: Record<string, unknown>,
+    id = "srv_t1"
+  ) {
+    const before = socket.sent.length;
+    socket.reply({ id, type: "deviceTransceiveRequest", payload });
+    await waitFor(() => socket.sent.length > before);
+    return socket.lastMessage();
+  }
+
+  afterEach(() => {
+    websocketService.setTransceiveHandler(null);
+  });
+
+  it("answers NOT_SUPPORTED when nothing can transceive", async () => {
+    const socket = await openConnection();
+    websocketService.setTransceiveHandler(null);
+
+    const reply = await requestTransceive(socket, { requestID: "x1", deviceID: "device-123" });
+
+    expect(reply.type).toBe("deviceTransceiveResponse");
+    expect(reply.payload).toMatchObject({
+      requestID: "x1",
+      success: false,
+      errorCode: "NOT_SUPPORTED",
+    });
+  });
+
+  it("hands the command to the handler and returns the tag's reply", async () => {
+    const socket = await openConnection();
+    websocketService.setTransceiveHandler(async (requestID: string) => ({
+      requestID,
+      success: true,
+      data: "kAA=",
+    }));
+
+    const reply = await requestTransceive(socket, {
+      requestID: "x2",
+      deviceID: "device-123",
+      data: "AKQEAA==",
+    });
+
+    expect(reply.payload).toMatchObject({ requestID: "x2", success: true, data: "kAA=" });
+  });
+
+  it("still answers when the handler throws", async () => {
+    const socket = await openConnection();
+    websocketService.setTransceiveHandler(async () => {
+      throw new Error("radio exploded");
+    });
+
+    const reply = await requestTransceive(socket, { requestID: "x3", deviceID: "device-123" });
+
+    expect(reply.payload).toMatchObject({
+      requestID: "x3",
+      success: false,
+      errorCode: "TRANSCEIVE_FAILED",
+    });
+  });
+
+  it("does not replay an earlier exchange the way a write is replayed", async () => {
+    const socket = await openConnection();
+    const handler = jest.fn(async (requestID: string) => ({ requestID, success: true }));
+    websocketService.setTransceiveHandler(handler);
+
+    await requestTransceive(socket, { requestID: "x4", deviceID: "device-123", data: "AA==" });
+    await requestTransceive(
+      socket,
+      { requestID: "x5", deviceID: "device-123", data: "AA==" },
+      "srv_t2"
+    );
+
+    // An exchange is a question to the tag; whether repeating it is safe is the
+    // agent's call, so every request reaches the tag.
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+});

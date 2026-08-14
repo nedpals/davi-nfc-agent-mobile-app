@@ -22,6 +22,9 @@ import {
   type TagScannedMessage,
   type TagRemovedMessage,
   type DeviceHeartbeatMessage,
+  type DeviceTransceiveRequestMessage,
+  type DeviceTransceiveRequestPayload,
+  type DeviceTransceiveResponsePayload,
   type DeviceWriteRequestMessage,
   type DeviceWriteRequestPayload,
   type DeviceWriteResponsePayload,
@@ -37,6 +40,12 @@ export type WriteHandler = (
   requestID: string,
   payload: DeviceWriteRequestPayload,
 ) => Promise<DeviceWriteResponsePayload>;
+
+/** Performs a raw exchange with the tag. Registered by the NFC service. */
+export type TransceiveHandler = (
+  requestID: string,
+  payload: DeviceTransceiveRequestPayload,
+) => Promise<DeviceTransceiveResponsePayload>;
 
 // How many idempotency keys to remember. A write is answered in seconds, so
 // this only has to outlive a dropped connection and its retry.
@@ -87,6 +96,7 @@ class WebSocketService {
   private negotiatedVersion: ProtocolVersion = 0;
 
   private writeHandler: WriteHandler | null = null;
+  private transceiveHandler: TransceiveHandler | null = null;
   // Outcomes keyed by idempotencyKey, so a repeated request reports what
   // happened the first time instead of writing the tag again.
   private appliedWrites = new Map<string, DeviceWriteResponsePayload>();
@@ -471,6 +481,12 @@ class WebSocketService {
         break;
       }
 
+      case "deviceTransceiveRequest":
+        // Not awaited, for the same reason as a write: an exchange has its own
+        // deadline, and frames behind it should not wait on the tag.
+        void this.handleTransceiveRequest(message as DeviceTransceiveRequestMessage);
+        break;
+
       case "deviceWriteRequest":
         // Deliberately not awaited: the agent allows 20s for a write, and
         // blocking the socket reader for that long would stall heartbeats and
@@ -526,6 +542,55 @@ class WebSocketService {
    */
   setWriteHandler(handler: WriteHandler | null): void {
     this.writeHandler = handler;
+  }
+
+  setTransceiveHandler(handler: TransceiveHandler | null): void {
+    this.transceiveHandler = handler;
+  }
+
+  /**
+   * Exchange bytes with the tag and report the reply.
+   *
+   * There is no idempotency key here and none is wanted: an exchange is a
+   * question to the tag, and whether asking twice is safe is the agent's call,
+   * not this device's.
+   */
+  private async handleTransceiveRequest(
+    message: DeviceTransceiveRequestMessage,
+  ): Promise<void> {
+    const payload = message.payload;
+    const requestID = payload?.requestID ?? message.id ?? "";
+
+    let result: DeviceTransceiveResponsePayload;
+
+    if (!payload) {
+      result = {
+        requestID,
+        success: false,
+        error: "Transceive request carried no payload",
+        errorCode: "INVALID_DATA",
+      };
+    } else if (!this.transceiveHandler) {
+      result = {
+        requestID,
+        success: false,
+        error: "This device cannot exchange raw commands",
+        errorCode: "NOT_SUPPORTED",
+      };
+    } else {
+      try {
+        result = await this.transceiveHandler(requestID, payload);
+      } catch (error) {
+        result = {
+          requestID,
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+          errorCode: "TRANSCEIVE_FAILED",
+        };
+      }
+    }
+
+    this.send({ id: message.id, type: "deviceTransceiveResponse", payload: result });
   }
 
   private async performWrite(
