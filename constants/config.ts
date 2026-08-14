@@ -32,8 +32,9 @@ export const NFC_CONFIG = {
 
 // mDNS discovery configuration
 export const DISCOVERY_CONFIG = {
-  // Service type to discover
-  SERVICE_TYPE: "nfc-agent",
+  // The agent advertises itself as _nfc-device._tcp, on the one port that
+  // serves both devices and clients.
+  SERVICE_TYPE: "nfc-device",
   PROTOCOL: "tcp",
   DOMAIN: "local.",
 
