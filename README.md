@@ -1,50 +1,71 @@
-# Welcome to your Expo app 👋
+# Davi NFC Scanner
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+An Expo app that turns a phone into a remote NFC reader for the
+[Davi NFC Agent](https://github.com/dotside-studios/davi-nfc-agent). It scans
+tags and streams them to the agent, which broadcasts them to the agent's own
+clients.
 
-## Get started
+The phone is a read-only sensor: it reports tags, and the agent does not drive
+it. Writing, locking and erasing are hardware-reader operations.
 
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Running it
 
 ```bash
-npm run reset-project
+npm install
+npm run android   # or: npm run ios
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+A development build is required — `react-native-zeroconf` and
+`react-native-nfc-manager` are native modules, so discovery and scanning do not
+work in Expo Go.
 
-## Learn more
+## Connecting to an agent
 
-To learn more about developing your project with Expo, look at the following resources:
+The agent serves devices and clients on **one port** (default 9470), telling
+them apart by a `mode=device` query parameter rather than by the port. The app
+appends that itself; a host and port are all you need to supply.
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+**Discovery.** The agent advertises `_nfc-device._tcp` on the local network. The
+app browses for it and auto-connects when exactly one agent is found. Its TXT
+records carry the port, the path and whether TLS is on.
 
-## Join the community
+**TLS.** The agent generates and persists a certificate on first run, so it
+serves `wss://` unless started with `-auto-tls=false`. The app assumes TLS
+unless the agent's TXT records or an explicit `ws://` prefix say otherwise.
 
-Join our community of developers creating universal apps.
+Because that certificate is signed by a CA the agent generates itself, the phone
+must trust it before `wss://` will complete. **Settings → Install agent
+certificate** opens the agent's bootstrap page (plain HTTP, port 9472), which
+serves the CA in the right format per platform. On Android, trusting a
+user-installed CA also requires the app to opt in, which it does via
+`plugins/with-android-user-ca-trust.js`.
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+**Authentication.** The agent generates an API secret on first run and checks it
+before the WebSocket handshake, exempting only loopback — so a phone always
+needs it. Enter it in **Settings → API secret**; a wrong or missing one fails as
+an HTTP 401 on the handshake rather than as an error on the socket. It is stored
+alongside the server URL, so a paired phone reconnects without re-entry.
+
+## Protocol
+
+The device side of [the agent's API](https://github.com/dotside-studios/davi-nfc-agent/blob/master/docs/api.md#device-api).
+The app sends `registerDevice`, then `tagScanned`, `tagRemoved` and a
+`deviceHeartbeat` every 10 seconds; the agent replies with
+`registerDeviceResponse` and `error`.
+
+Device identity is per-connection: the agent mints a fresh `deviceID` on each
+registration and drops it when the socket closes, so a reconnect is a new
+device. Tags scanned while disconnected are kept in local history but are not
+replayed to the agent.
+
+## Layout
+
+| Path | What it is |
+|---|---|
+| `services/websocket.ts` | The agent connection — registration, heartbeat, reconnection |
+| `services/agent-url.ts` | Builds the device URL: scheme, path, discriminator, secret |
+| `services/discovery.ts` | mDNS browsing and the URL built from a resolved service |
+| `services/nfc.ts` | Tag reading, NDEF parsing, UID and technology normalization |
+| `stores/index.ts` | Zustand store; what persists is set by `partialize` |
+| `types/protocol.ts` | Wire types for every message in both directions |
+| `plugins/` | Config plugins applied at prebuild |
