@@ -95,9 +95,10 @@ export const getDeviceCapabilities = () => {
     canWrite: !isIOS,
     nfcType: isIOS ? "corenfc" : "isodep",
 
-    // Neither APDU nor framing-level exchange is implemented.
-    canTransceive: false,
-    canTransceiveRaw: false,
+    // Both exchange levels ride on the same session a write uses, so they
+    // follow the same platform line.
+    canTransceive: !isIOS,
+    canTransceiveRaw: !isIOS,
     // Locking rides on the same session a write uses.
     canLock: !isIOS,
 

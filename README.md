@@ -144,9 +144,9 @@ to tear it down. An error the agent marks non-retryable — a registration it
 refuses — stops the reconnect loop instead of spending its ten attempts on an
 answer that will not change.
 
-Capabilities are declared per platform and honestly: no transceive, MIFARE
-Classic on Android only since CoreNFC cannot reach it, and writing on Android
-only — see below.
+Capabilities are declared per platform and honestly: MIFARE Classic on Android
+only since CoreNFC cannot reach it, and writing and transceive on Android only —
+see below.
 
 ## Writing tags
 
@@ -174,6 +174,27 @@ writing again, because a repeated request means a lost response rather than a
 second write. Failures answer with the agent's own codes — `READ_ONLY`,
 `CAPACITY_EXCEEDED`, `TAG_REMOVED` — so it can tell a refusal from a retry, and
 a refusal is always answered rather than left to time out.
+
+## Transceive
+
+`deviceTransceiveRequest` exchanges raw bytes with the tag and hands back its
+reply, on the same Android-only terms as writing and over the same reused
+session. `raw` picks framing-level exchange (`NfcA`) over APDU-level
+(`IsoDep`) — a different technology, and a tag that answers one may not answer
+the other.
+
+**There is no idempotency key here, and that is right.** An exchange is a
+question to the tag, and only the agent knows whether asking twice is safe. So
+every request reaches the tag, and deciding whether to repeat one stays with the
+caller.
+
+`timeoutMs` is honoured on this side. The agent allows itself a second more than
+it asks for, so a device that keeps its own deadline reports a real error
+instead of both ends racing to time out — and the session is closed either way,
+rather than left open holding the tag.
+
+Worth knowing before reaching for it: each command is one network round trip.
+That is fine for DESFire or ISO-DEP work, and the wrong tool for bulk reading.
 
 Device identity is per-connection: the agent mints a fresh `deviceID` on each
 registration and drops it when the socket closes, so a reconnect is a new
