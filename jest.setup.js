@@ -56,12 +56,27 @@ jest.mock("react-native-nfc-manager", () => {
       registerTagEvent: jest.fn(() => Promise.resolve()),
       unregisterTagEvent: jest.fn(() => Promise.resolve()),
       goToNfcSetting: jest.fn(() => Promise.resolve()),
+      requestTechnology: jest.fn(() => Promise.resolve()),
+      cancelTechnologyRequest: jest.fn(() => Promise.resolve()),
+      ndefHandler: {
+        writeNdefMessage: jest.fn(() => Promise.resolve()),
+        makeReadOnly: jest.fn(() => Promise.resolve()),
+      },
     },
     Ndef: {
+      TNF_EMPTY: 0,
       TNF_WELL_KNOWN: 1,
+      TNF_MIME_MEDIA: 2,
       text: { decodePayload: jest.fn(decodeText) },
       uri: { decodePayload: jest.fn(decodeUri) },
+      // The encoders keep enough shape to assert which record form was built;
+      // the byte layout itself is the library's business, not the app's.
+      textRecord: jest.fn((content, language) => ({ kind: "text", content, language })),
+      uriRecord: jest.fn((uri) => ({ kind: "uri", uri })),
+      record: jest.fn((tnf, type, id, payload) => ({ kind: "record", tnf, type, id, payload })),
+      encodeMessage: jest.fn((records) => records.map((_, index) => index)),
     },
+    NfcTech: { Ndef: "Ndef" },
     NfcEvents: { DiscoverTag: "NfcManagerDiscoverTag" },
     NfcAdapter: {
       FLAG_READER_NFC_A: 1,
