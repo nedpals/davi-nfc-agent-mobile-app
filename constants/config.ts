@@ -88,14 +88,18 @@ export const getDeviceCapabilities = () => {
 
   return {
     canRead: true,
-    // No write path exists in the app yet, so writing is not offered.
-    canWrite: false,
+    // Android only. Writing needs a technology session over a tag already in
+    // the field, which reader mode provides; CoreNFC sessions are user-initiated
+    // and modal, so an agent-driven write cannot complete without the person
+    // presenting the tag to a system sheet.
+    canWrite: !isIOS,
     nfcType: isIOS ? "corenfc" : "isodep",
 
     // Neither APDU nor framing-level exchange is implemented.
     canTransceive: false,
     canTransceiveRaw: false,
-    canLock: false,
+    // Locking rides on the same session a write uses.
+    canLock: !isIOS,
 
     deviceType: "smartphone",
     supportedTagTypes: isIOS
