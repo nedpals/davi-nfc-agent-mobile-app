@@ -15,7 +15,7 @@
         "NFCReaderUsageDescription": "Scan NFC tags to send to the DAVI server",
         "NSLocalNetworkUsageDescription": "Discover NFC Agent servers on your local network",
         "NSBonjourServices": [
-          "_nfc-agent._tcp"
+          "_nfc-device._tcp"
         ]
       }
     },
@@ -63,14 +63,8 @@
           "systemCodes": []
         }
       ],
-      [
-        "expo-build-properties",
-        {
-          "android": {
-            "usesCleartextTraffic": true
-          }
-        }
-      ]
+      "./plugins/with-android-agent-network",
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true,

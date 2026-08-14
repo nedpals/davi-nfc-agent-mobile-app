@@ -5,6 +5,7 @@ import { Platform } from "react-native";
 import type {
   ConnectionStatus,
   DiscoveredServer,
+  ProtocolVersion,
   ScannedTag,
   ServerInfo,
 } from "@/types/protocol";
@@ -14,9 +15,22 @@ import { APP_VERSION, getDeviceName } from "@/constants/config";
 interface ConnectionState {
   status: ConnectionStatus;
   serverUrl: string | null;
+  // The agent's API secret. It generates one on first run, so a device on the
+  // LAN is rejected at the handshake without it.
+  apiSecret: string | null;
   error: string | null;
   lastConnected: Date | null;
   serverInfo: ServerInfo | null;
+  // What the agent agreed to speak: 1 after a hello handshake, 0 against an
+  // agent that predates versioning.
+  protocolVersion: ProtocolVersion;
+  // Set once the device holds its own paired credential, so the UI can stop
+  // asking for the shared secret.
+  isPaired: boolean;
+  // Whether the agent's key pin is actually being enforced on this connection.
+  // "unavailable" means a pin is held but this build cannot check it, which is
+  // worth showing rather than letting the connection read as verified.
+  pinningState: "pinned" | "not-applicable" | "unavailable";
 }
 
 // Device state slice
@@ -51,6 +65,10 @@ interface AppStore {
   connection: ConnectionState;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setServerUrl: (url: string | null) => void;
+  setApiSecret: (secret: string | null) => void;
+  setProtocolVersion: (version: ProtocolVersion) => void;
+  setPaired: (paired: boolean) => void;
+  setPinningState: (state: ConnectionState["pinningState"]) => void;
   setConnectionError: (error: string | null) => void;
   setLastConnected: (date: Date | null) => void;
   setServerInfo: (info: ServerInfo | null) => void;
@@ -90,9 +108,13 @@ interface AppStore {
 const initialConnectionState: ConnectionState = {
   status: "disconnected",
   serverUrl: null,
+  apiSecret: null,
   error: null,
   lastConnected: null,
   serverInfo: null,
+  protocolVersion: 0,
+  isPaired: false,
+  pinningState: "not-applicable",
 };
 
 // Ensure platform is always 'ios' or 'android'
@@ -136,6 +158,22 @@ export const useAppStore = create<AppStore>()(
       setServerUrl: (serverUrl) =>
         set((state) => ({
           connection: { ...state.connection, serverUrl },
+        })),
+      setApiSecret: (apiSecret) =>
+        set((state) => ({
+          connection: { ...state.connection, apiSecret },
+        })),
+      setProtocolVersion: (protocolVersion) =>
+        set((state) => ({
+          connection: { ...state.connection, protocolVersion },
+        })),
+      setPaired: (isPaired) =>
+        set((state) => ({
+          connection: { ...state.connection, isPaired },
+        })),
+      setPinningState: (pinningState) =>
+        set((state) => ({
+          connection: { ...state.connection, pinningState },
         })),
       setConnectionError: (error) =>
         set((state) => ({
@@ -273,6 +311,7 @@ export const useAppStore = create<AppStore>()(
           connection: {
             ...initialConnectionState,
             serverUrl: state.connection.serverUrl,
+            apiSecret: state.connection.apiSecret,
             lastConnected: state.connection.lastConnected,
           },
           device: {
@@ -288,6 +327,7 @@ export const useAppStore = create<AppStore>()(
       partialize: (state) => ({
         connection: {
           serverUrl: state.connection.serverUrl,
+          apiSecret: state.connection.apiSecret,
           lastConnected: state.connection.lastConnected,
         },
         device: {

@@ -1,4 +1,5 @@
 import * as Device from "expo-device";
+import { Platform } from "react-native";
 
 // App configuration constants
 
@@ -8,6 +9,13 @@ export const APP_VERSION = "1.0.0";
 export const WS_CONFIG = {
   // Default WebSocket path
   DEFAULT_PATH: "/ws",
+
+  // The agent's default port. It serves devices and clients on this one port,
+  // told apart by the mode=device discriminator.
+  DEFAULT_PORT: 9470,
+
+  // The CA bootstrap server, which is separate and always plain HTTP.
+  BOOTSTRAP_PORT: 9472,
 
   // Heartbeat interval in milliseconds (10 seconds per protocol)
   HEARTBEAT_INTERVAL: 10000,
@@ -32,8 +40,9 @@ export const NFC_CONFIG = {
 
 // mDNS discovery configuration
 export const DISCOVERY_CONFIG = {
-  // Service type to discover
-  SERVICE_TYPE: "nfc-agent",
+  // The agent advertises itself as _nfc-device._tcp, on the one port that
+  // serves both devices and clients.
+  SERVICE_TYPE: "nfc-device",
   PROTOCOL: "tcp",
   DOMAIN: "local.",
 
@@ -71,3 +80,31 @@ export const getDeviceMetadata = () => ({
   osVersion: `${Device.osName} ${Device.osVersion}`,
   model: Device.modelId || Device.modelName || "Unknown",
 });
+
+/**
+ * What this device can actually do, which is not the same on both platforms.
+ *
+ * The agent acts on what is declared here, so everything is reported as it is:
+ * the app reads NDEF and nothing else, and CoreNFC cannot reach MIFARE Classic
+ * at all where Android's reader mode can.
+ */
+export const getDeviceCapabilities = () => {
+  const isIOS = Platform.OS === "ios";
+
+  return {
+    canRead: true,
+    // No write path exists in the app yet, so writing is not offered.
+    canWrite: false,
+    nfcType: isIOS ? "corenfc" : "isodep",
+
+    // Neither APDU nor framing-level exchange is implemented.
+    canTransceive: false,
+    canTransceiveRaw: false,
+    canLock: false,
+
+    deviceType: "smartphone",
+    supportedTagTypes: isIOS
+      ? ["NTAG", "MIFARE Ultralight", "ISO-DEP"]
+      : ["NTAG", "MIFARE Ultralight", "MIFARE Classic", "ISO-DEP"],
+  };
+};
