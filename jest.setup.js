@@ -62,6 +62,8 @@ jest.mock("react-native-nfc-manager", () => {
         writeNdefMessage: jest.fn(() => Promise.resolve()),
         makeReadOnly: jest.fn(() => Promise.resolve()),
       },
+      isoDepHandler: { transceive: jest.fn(() => Promise.resolve([0x90, 0x00])) },
+      nfcAHandler: { transceive: jest.fn(() => Promise.resolve([0x0a, 0x0b])) },
     },
     Ndef: {
       TNF_EMPTY: 0,
@@ -76,7 +78,7 @@ jest.mock("react-native-nfc-manager", () => {
       record: jest.fn((tnf, type, id, payload) => ({ kind: "record", tnf, type, id, payload })),
       encodeMessage: jest.fn((records) => records.map((_, index) => index)),
     },
-    NfcTech: { Ndef: "Ndef" },
+    NfcTech: { Ndef: "Ndef", NfcA: "NfcA", IsoDep: "IsoDep" },
     NfcEvents: { DiscoverTag: "NfcManagerDiscoverTag" },
     NfcAdapter: {
       FLAG_READER_NFC_A: 1,
