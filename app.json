@@ -63,7 +63,7 @@
           "systemCodes": []
         }
       ],
-      "./plugins/with-android-user-ca-trust",
+      "./plugins/with-android-agent-network",
       "expo-secure-store"
     ],
     "experiments": {
