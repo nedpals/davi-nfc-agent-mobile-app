@@ -186,6 +186,72 @@ export interface ErrorMessage extends BaseMessage {
 // person to present the tag again rather than resending on a timer.
 export const ERROR_CODE_TAG_REMOVED = "TAG_REMOVED";
 
+// The outcomes a write can report, from the agent's NFC error taxonomy.
+export const WRITE_ERROR_CODES = {
+  notSupported: "NOT_SUPPORTED",
+  tagRemoved: "TAG_REMOVED",
+  writeFailed: "WRITE_FAILED",
+  tagNotConnected: "TAG_NOT_CONNECTED",
+  readOnly: "READ_ONLY",
+  capacityExceeded: "CAPACITY_EXCEEDED",
+  invalidData: "INVALID_DATA",
+} as const;
+
+export type WriteErrorCode = (typeof WRITE_ERROR_CODES)[keyof typeof WRITE_ERROR_CODES];
+
+// The record form the agent sends when it cannot send encoded bytes. Kept for
+// completeness: this device writes ndefBytes, which the agent calls
+// authoritative where the two disagree.
+export interface NDEFRecordInput {
+  recordType?: "text" | "uri" | "mime" | "external";
+  content?: string;
+  language?: string;
+  mimeType?: string;
+  tnf?: number;
+  // Go encodes []byte as base64, so these arrive as strings rather than arrays.
+  type?: string;
+  id?: string;
+  payload?: string;
+}
+
+export interface NDEFMessageInput {
+  records: NDEFRecordInput[];
+}
+
+export interface DeviceWriteRequestPayload {
+  requestID: string;
+  deviceID: string;
+  ndefMessage?: NDEFMessageInput;
+  // The same message already encoded, base64 on the wire. Authoritative where
+  // it and ndefMessage disagree.
+  ndefBytes?: string;
+  // When set, the write is meant for this tag; anything else present is a
+  // different tag and the write must be refused rather than misapplied.
+  tagUID?: string;
+  lock?: boolean;
+  // Identifies the logical write. The same request can arrive twice when a
+  // response is lost, and a tag written twice is not the same as written once.
+  idempotencyKey?: string;
+}
+
+export interface DeviceWriteRequestMessage extends BaseMessage {
+  type: "deviceWriteRequest";
+  payload: DeviceWriteRequestPayload;
+}
+
+export interface DeviceWriteResponsePayload {
+  requestID: string;
+  success: boolean;
+  error?: string;
+  // Preferred over parsing the error string.
+  errorCode?: WriteErrorCode;
+}
+
+export interface DeviceWriteResponseMessage extends BaseMessage {
+  type: "deviceWriteResponse";
+  payload: DeviceWriteResponsePayload;
+}
+
 // Pairing exchanges the kiosk's PIN for a credential belonging to this device.
 export interface PairRequest {
   deviceName: string;
@@ -231,11 +297,13 @@ export type OutgoingMessage =
   | TagScannedMessage
   | TagRemovedMessage
   | DeviceHeartbeatMessage
+  | DeviceWriteResponseMessage
   | GoodbyeMessage;
 
 export type IncomingMessage =
   | HelloResponse
   | RegisterDeviceResponse
+  | DeviceWriteRequestMessage
   | ErrorMessage;
 
 // Discovered server from mDNS

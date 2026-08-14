@@ -99,6 +99,29 @@ export function bytesToBase64(bytes: Bytes): string {
   return btoa(binary);
 }
 
+/**
+ * Decode the base64 the agent sends for byte fields.
+ *
+ * Go encodes `[]byte` as a base64 string rather than an array, so `ndefBytes`
+ * and the low-level record fields arrive this way.
+ */
+export function base64ToBytes(value: string): number[] {
+  const binary = atob(value);
+  const bytes = new Array<number>(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+/**
+ * Decode base64 to the string form NDEF record types take — they are short
+ * ASCII names like "T" or "U", not byte arrays.
+ */
+export function base64ToString(value: string): string {
+  return atob(value);
+}
+
 export function bytesToString(bytes: Bytes): string {
   if (typeof bytes === "string") {
     return bytes;
