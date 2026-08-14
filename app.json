@@ -63,14 +63,7 @@
           "systemCodes": []
         }
       ],
-      [
-        "expo-build-properties",
-        {
-          "android": {
-            "usesCleartextTraffic": true
-          }
-        }
-      ]
+      "./plugins/with-android-user-ca-trust"
     ],
     "experiments": {
       "typedRoutes": true,
