@@ -9,48 +9,44 @@ export function useConnection() {
   const device = useAppStore((state) => state.device);
 
   const connect = useCallback(async (serverUrl: string) => {
-    try {
-      await websocketService.connect(serverUrl);
-      await websocketService.registerDevice();
-    } catch (error) {
-      console.error("[useConnection] Connect failed:", error);
-      throw error;
-    }
+    await websocketService.connectAndRegister(serverUrl);
   }, []);
 
-  const connectToServer = useCallback(async (server: DiscoveredServer) => {
-    const url = discoveryService.buildWebSocketUrl(server);
-    await connect(url);
-  }, [connect]);
+  const connectToServer = useCallback(
+    async (server: DiscoveredServer) => {
+      await connect(discoveryService.buildWebSocketUrl(server));
+    },
+    [connect]
+  );
 
   const disconnect = useCallback(() => {
     websocketService.disconnect();
   }, []);
 
-  const reconnect = useCallback(async () => {
-    if (connection.serverUrl) {
-      await connect(connection.serverUrl);
-    }
-  }, [connection.serverUrl, connect]);
+  const retry = useCallback(async () => {
+    await websocketService.retry();
+  }, []);
 
   return {
-    // State
     status: connection.status,
     isConnected: connection.status === "connected" || connection.status === "registered",
     isRegistered: connection.status === "registered",
+    isBusy: connection.status === "connecting" || connection.status === "reconnecting",
     error: connection.error,
     serverUrl: connection.serverUrl,
     serverInfo: connection.serverInfo,
     lastConnected: connection.lastConnected,
+    reconnectAttempt: connection.reconnectAttempt,
+    protocolVersion: connection.protocolVersion,
+    isPaired: connection.pairing !== null,
+    pinningState: connection.pinningState,
 
-    // Device info
     deviceId: device.deviceId,
     deviceName: device.deviceName,
 
-    // Actions
     connect,
     connectToServer,
     disconnect,
-    reconnect,
+    retry,
   };
 }

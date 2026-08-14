@@ -1,23 +1,31 @@
-import { useEffect, useState } from "react";
+import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
+import { useEffect, useRef, useState } from "react";
 import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  ScrollView,
   Alert,
   KeyboardAvoidingView,
   Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
-import { useConnection } from "@/hooks";
+import { Button } from "@/components/Button";
+import { InfoRow, Section } from "@/components/Section";
+import { colors, radius, spacing, typography } from "@/constants/theme";
+import { useConnection, usePairing } from "@/hooks";
 import { hostFromAgentUrl } from "@/services/agent-url";
-import { clearCredential, loadCredential, saveCredential } from "@/services/credentials";
-import { pairWithAgent } from "@/services/pairing";
 import { useAppStore } from "@/stores";
-import type { AgentCredential } from "@/types/protocol";
+import { formatDateTime, truncateMiddle } from "@/utils/format";
+
+const pinningLabel = {
+  pinned: { text: "Enforced", tone: "success" },
+  unavailable: { text: "This build cannot verify it", tone: "danger" },
+  "not-applicable": { text: "No key held", tone: "muted" },
+} as const;
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -28,323 +36,264 @@ export default function SettingsScreen() {
     deviceName,
     serverInfo,
     lastConnected,
+    protocolVersion,
     connect,
     disconnect,
     isConnected,
+    isBusy,
   } = useConnection();
+
+  const { pairing, isPaired, pinningState, isPairing, pair, unpair } = usePairing();
 
   const setDeviceName = useAppStore((state) => state.setDeviceName);
   const setApiSecret = useAppStore((state) => state.setApiSecret);
   const device = useAppStore((state) => state.device);
   const apiSecret = useAppStore((state) => state.connection.apiSecret);
 
-  const [urlInput, setUrlInput] = useState(serverUrl || "");
+  const [urlInput, setUrlInput] = useState(serverUrl ?? "");
   const [nameInput, setNameInput] = useState(deviceName);
-  const [secretInput, setSecretInput] = useState(apiSecret || "");
+  const [secretInput, setSecretInput] = useState(apiSecret ?? "");
   const [pinInput, setPinInput] = useState("");
-  const [credential, setCredential] = useState<AgentCredential | null>(null);
-  const [isPairing, setIsPairing] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
+  const urlEdited = useRef(false);
 
-  const setPaired = useAppStore((state) => state.setPaired);
-  const pinningState = useAppStore((state) => state.connection.pinningState);
-
+  // Discovery can settle on an address while this screen is open, and showing
+  // the stale one would have the user connect somewhere else entirely.
   useEffect(() => {
-    loadCredential().then((stored) => {
-      setCredential(stored);
-      setPaired(stored !== null);
-    });
-  }, [setPaired]);
-
-  const handlePair = async () => {
-    const host = hostFromAgentUrl(urlInput);
-    if (!host) {
-      Alert.alert("Enter the agent's address first", "Pairing needs to know which agent to ask.");
-      return;
+    if (!urlEdited.current) {
+      setUrlInput(serverUrl ?? "");
     }
-    if (!pinInput.trim()) {
-      Alert.alert("Enter the PIN", "The agent shows a six-digit PIN in its tray menu and logs.");
+  }, [serverUrl]);
+
+  const handleSaveName = () => {
+    const name = nameInput.trim();
+    if (!name) {
+      Alert.alert("Name required", "Give this device a name the agent can show.");
       return;
     }
 
-    setIsPairing(true);
-    try {
-      const paired = await pairWithAgent(host, pinInput.trim(), nameInput.trim() || deviceName);
-      await saveCredential(paired);
-      setCredential(paired);
-      setPaired(true);
-      setPinInput("");
-      Alert.alert(
-        "Paired",
-        paired.publicKeyPin
-          ? "This device has its own credential and knows the agent's key."
-          : "This device has its own credential. The agent is serving without TLS.",
-      );
-    } catch (error) {
-      Alert.alert("Pairing failed", error instanceof Error ? error.message : String(error));
-    } finally {
-      setIsPairing(false);
-    }
-  };
-
-  const handleUnpair = async () => {
-    await clearCredential();
-    setCredential(null);
-    setPaired(false);
-    Alert.alert(
-      "Unpaired",
-      "The credential was removed from this device. Revoke it from the agent's tray as well if it should stop working there.",
-    );
+    setDeviceName(name);
+    Alert.alert("Saved", "The new name is sent the next time this device registers.");
   };
 
   const handleConnect = async () => {
-    if (!urlInput.trim()) {
-      Alert.alert("Invalid URL", "Please enter a server URL");
+    const url = urlInput.trim();
+    if (!url) {
+      Alert.alert("Address required", "Enter the agent's address, such as 192.168.1.100:9470.");
       return;
     }
 
-    // Commit the secret before dialling, since the connection reads it from
-    // the store rather than from this screen.
+    // Committed before dialling, since the connection reads the secret from the
+    // store rather than from this screen.
     setApiSecret(secretInput.trim() || null);
-
     setIsConnecting(true);
+
     try {
-      await connect(urlInput.trim());
-      Alert.alert("Connected", "Successfully connected to server");
+      await connect(url);
+      urlEdited.current = false;
     } catch (error) {
       Alert.alert(
-        "Connection Failed",
-        error instanceof Error ? error.message : "Failed to connect"
+        "Could not connect",
+        error instanceof Error ? error.message : "The agent did not answer."
       );
     } finally {
       setIsConnecting(false);
     }
   };
 
-  const handleDisconnect = () => {
-    disconnect();
-  };
+  const handlePair = async () => {
+    const host = hostFromAgentUrl(urlInput);
+    if (!host) {
+      Alert.alert("Address required", "Pairing needs to know which agent to ask.");
+      return;
+    }
+    if (!pinInput.trim()) {
+      Alert.alert("PIN required", "The agent shows a six-digit PIN in its tray menu and logs.");
+      return;
+    }
 
-  const handleSaveName = () => {
-    if (nameInput.trim()) {
-      setDeviceName(nameInput.trim());
-      Alert.alert("Saved", "Device name updated");
+    try {
+      const credential = await pair(host, pinInput.trim(), nameInput.trim() || deviceName);
+      setPinInput("");
+      Alert.alert(
+        "Paired",
+        credential.publicKeyPin
+          ? "This device has its own credential and knows the agent's key."
+          : "This device has its own credential. The agent is serving without TLS."
+      );
+    } catch (error) {
+      Alert.alert("Pairing failed", error instanceof Error ? error.message : String(error));
     }
   };
 
-  const formatDate = (date: Date | null | string): string => {
-    if (!date) return "Never";
-    const d = date instanceof Date ? date : new Date(date);
-    return d.toLocaleString();
+  const handleUnpair = () => {
+    Alert.alert("Remove this device's credential?", "It will fall back to the shared API secret.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Unpair",
+        style: "destructive",
+        onPress: () => {
+          unpair()
+            .then(() =>
+              Alert.alert(
+                "Unpaired",
+                "Revoke it from the agent's tray as well if it should stop working there."
+              )
+            )
+            .catch((error) => Alert.alert("Could not unpair", String(error)));
+        },
+      },
+    ]);
   };
 
-  return (
-    <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        style={styles.keyboardView}
-      >
-        <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
-          <View style={styles.header}>
-            <TouchableOpacity onPress={() => router.back()}>
-              <Text style={styles.backButton}>← Back</Text>
-            </TouchableOpacity>
-            <Text style={styles.title}>Settings</Text>
-          </View>
+  const pinning = pinningLabel[pinningState];
 
-          {/* Device Name Section */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Device Name</Text>
-            <View style={styles.inputRow}>
+  return (
+    <SafeAreaView style={styles.screen} edges={["top", "left", "right"]}>
+      <View style={styles.header}>
+        <TouchableOpacity
+          onPress={() => router.back()}
+          style={styles.back}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+          hitSlop={8}
+        >
+          <Ionicons name="chevron-back" size={22} color={colors.brand} />
+        </TouchableOpacity>
+        <Text style={styles.title}>Settings</Text>
+      </View>
+
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={styles.flex}
+      >
+        <ScrollView
+          style={styles.flex}
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+        >
+          <Section title="Device name" footer="Shown by the agent to identify this reader.">
+            <View style={styles.row}>
               <TextInput
                 style={styles.input}
                 value={nameInput}
                 onChangeText={setNameInput}
-                placeholder="Enter device name"
-                placeholderTextColor="#9CA3AF"
+                placeholder="Kiosk phone"
+                placeholderTextColor={colors.textFaint}
               />
-              <TouchableOpacity
-                style={styles.saveButton}
-                onPress={handleSaveName}
-              >
-                <Text style={styles.saveButtonText}>Save</Text>
-              </TouchableOpacity>
+              <Button label="Save" onPress={handleSaveName} style={styles.inlineButton} />
             </View>
-          </View>
+          </Section>
 
-          {/* Server Connection Section */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Server Connection</Text>
+          <Section
+            title="Agent"
+            footer="Connects over wss://. Prefix with ws:// for an agent started with -auto-tls=false."
+          >
             <TextInput
               style={styles.input}
               value={urlInput}
-              onChangeText={setUrlInput}
+              onChangeText={(value) => {
+                urlEdited.current = true;
+                setUrlInput(value);
+              }}
               placeholder="192.168.1.100:9470"
-              placeholderTextColor="#9CA3AF"
+              placeholderTextColor={colors.textFaint}
               autoCapitalize="none"
               autoCorrect={false}
               keyboardType="url"
             />
-            <Text style={styles.hint}>
-              Connects over wss://. Prefix with ws:// for an agent started with
-              -auto-tls=false.
-            </Text>
 
-            <TextInput
-              style={[styles.input, styles.stackedInput]}
-              value={secretInput}
-              onChangeText={setSecretInput}
-              placeholder="Shared API secret (only if not paired)"
-              placeholderTextColor="#9CA3AF"
-              autoCapitalize="none"
-              autoCorrect={false}
-              secureTextEntry
-            />
-            <Text style={styles.hint}>
-              Pairing below replaces this. The shared secret still works, but
-              rotating it logs out every device at once.
-            </Text>
-
-            <View style={styles.buttonRow}>
-              {isConnected ? (
-                <TouchableOpacity
-                  style={[styles.button, styles.disconnectButton]}
-                  onPress={handleDisconnect}
-                >
-                  <Text style={styles.disconnectButtonText}>Disconnect</Text>
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity
-                  style={[styles.button, styles.connectButton]}
-                  onPress={handleConnect}
-                  disabled={isConnecting}
-                >
-                  <Text style={styles.connectButtonText}>
-                    {isConnecting ? "Connecting..." : "Connect"}
-                  </Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          </View>
-
-          {/* Pairing Section */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Pairing</Text>
-
-            {credential ? (
-              <>
-                <View style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>Paired with</Text>
-                  <Text style={styles.infoValue}>{credential.host}</Text>
-                </View>
-                <View style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>Device ID</Text>
-                  <Text style={styles.infoValue}>{credential.deviceID}</Text>
-                </View>
-                <View style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>Agent key pin</Text>
-                  <Text style={styles.infoValue}>
-                    {credential.publicKeyPin || "None — agent serves no TLS"}
-                  </Text>
-                </View>
-                <View style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>Pin enforced</Text>
-                  <Text style={styles.infoValue}>
-                    {pinningState === "pinned"
-                      ? "Yes"
-                      : pinningState === "unavailable"
-                        ? "No — this build cannot verify it"
-                        : "Not applicable"}
-                  </Text>
-                </View>
-                <View style={styles.buttonRow}>
-                  <TouchableOpacity
-                    style={[styles.button, styles.disconnectButton]}
-                    onPress={handleUnpair}
-                  >
-                    <Text style={styles.disconnectButtonText}>Unpair</Text>
-                  </TouchableOpacity>
-                </View>
-              </>
-            ) : (
-              <>
-                <TextInput
-                  style={styles.input}
-                  value={pinInput}
-                  onChangeText={setPinInput}
-                  placeholder="Six-digit PIN"
-                  placeholderTextColor="#9CA3AF"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  keyboardType="number-pad"
-                  maxLength={6}
-                />
-                <Text style={styles.hint}>
-                  The agent shows the PIN in its tray menu, its logs, and its
-                  pairing page. Five wrong attempts lock pairing until it
-                  restarts.
-                </Text>
-                <View style={styles.buttonRow}>
-                  <TouchableOpacity
-                    style={[styles.button, styles.connectButton]}
-                    onPress={handlePair}
-                    disabled={isPairing}
-                  >
-                    <Text style={styles.connectButtonText}>
-                      {isPairing ? "Pairing..." : "Pair with agent"}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-                <Text style={styles.hint}>
-                  Pairing gives this device its own credential, revocable on its
-                  own from the agent&apos;s tray.
-                </Text>
-              </>
+            {!isPaired && (
+              <TextInput
+                style={[styles.input, styles.stacked]}
+                value={secretInput}
+                onChangeText={setSecretInput}
+                placeholder="Shared API secret"
+                placeholderTextColor={colors.textFaint}
+                autoCapitalize="none"
+                autoCorrect={false}
+                secureTextEntry
+              />
             )}
-          </View>
 
-          {/* Device Info Section */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Device Info</Text>
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Device ID</Text>
-              <Text style={styles.infoValue}>{deviceId || "Not registered"}</Text>
-            </View>
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Platform</Text>
-              <Text style={styles.infoValue}>
-                {device.platform === "ios" ? "iOS" : "Android"}
-              </Text>
-            </View>
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>App Version</Text>
-              <Text style={styles.infoValue}>{device.appVersion}</Text>
-            </View>
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Connection Status</Text>
-              <Text style={styles.infoValue}>{status}</Text>
-            </View>
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Last Connected</Text>
-              <Text style={styles.infoValue}>{formatDate(lastConnected)}</Text>
-            </View>
-          </View>
+            {isConnected ? (
+              <Button
+                label="Disconnect"
+                variant="danger"
+                onPress={disconnect}
+                style={styles.stacked}
+              />
+            ) : (
+              <Button
+                label={isConnecting || isBusy ? "Connecting…" : "Connect"}
+                onPress={handleConnect}
+                loading={isConnecting || isBusy}
+                style={styles.stacked}
+              />
+            )}
+          </Section>
 
-          {/* Server Info Section (when connected) */}
+          {isPaired && pairing ? (
+            <Section
+              title="Pairing"
+              footer="Each device's credential is revoked on its own from the agent's tray."
+            >
+              <InfoRow label="Agent" value={pairing.host} />
+              <InfoRow label="Device ID" value={truncateMiddle(pairing.deviceID)} mono />
+              <InfoRow
+                label="Agent key pin"
+                value={pairing.publicKeyPin ? truncateMiddle(pairing.publicKeyPin, 10) : "None — no TLS"}
+                mono
+              />
+              <InfoRow label="Pin" value={pinning.text} tone={pinning.tone} last />
+              <Button
+                label="Unpair"
+                variant="danger"
+                onPress={handleUnpair}
+                style={styles.stacked}
+              />
+            </Section>
+          ) : (
+            <Section
+              title="Pairing"
+              footer="The agent shows the PIN in its tray menu, its logs and its pairing page. Five wrong attempts lock pairing until it restarts."
+            >
+              <TextInput
+                style={styles.input}
+                value={pinInput}
+                onChangeText={setPinInput}
+                placeholder="Six-digit PIN"
+                placeholderTextColor={colors.textFaint}
+                keyboardType="number-pad"
+                maxLength={6}
+              />
+              <Button
+                label={isPairing ? "Pairing…" : "Pair with agent"}
+                onPress={handlePair}
+                loading={isPairing}
+                style={styles.stacked}
+              />
+            </Section>
+          )}
+
+          <Section title="This device">
+            <InfoRow label="Registered ID" value={deviceId ?? "Not registered"} mono />
+            <InfoRow label="Platform" value={device.platform === "ios" ? "iOS" : "Android"} />
+            <InfoRow label="App version" value={device.appVersion} />
+            <InfoRow label="Status" value={status} />
+            <InfoRow label="Last connected" value={formatDateTime(lastConnected)} last />
+          </Section>
+
           {serverInfo && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Server Info</Text>
-              <View style={styles.infoRow}>
-                <Text style={styles.infoLabel}>Version</Text>
-                <Text style={styles.infoValue}>{serverInfo.version}</Text>
-              </View>
-              <View style={styles.infoRow}>
-                <Text style={styles.infoLabel}>Supported NFC</Text>
-                <Text style={styles.infoValue}>
-                  {serverInfo.supportedNFC.join(", ")}
-                </Text>
-              </View>
-            </View>
+            <Section title="Agent details">
+              <InfoRow label="Version" value={serverInfo.version} />
+              <InfoRow label="Protocol" value={`v${protocolVersion}`} />
+              <InfoRow
+                label="Supported NFC"
+                value={serverInfo.supportedNFC.join(", ") || "—"}
+                last
+              />
+            </Section>
           )}
         </ScrollView>
       </KeyboardAvoidingView>
@@ -353,123 +302,53 @@ export default function SettingsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
+  screen: {
     flex: 1,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: colors.background,
   },
-  keyboardView: {
+  flex: {
     flex: 1,
-  },
-  scroll: {
-    flex: 1,
-  },
-  content: {
-    padding: 16,
   },
   header: {
-    marginBottom: 24,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
   },
-  backButton: {
-    fontSize: 16,
-    color: "#3B82F6",
-    marginBottom: 8,
+  back: {
+    width: 32,
+    height: 32,
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: -spacing.sm,
   },
   title: {
-    fontSize: 28,
-    fontWeight: "700",
-    color: "#1F2937",
+    ...typography.screenTitle,
+    color: colors.text,
   },
-  section: {
-    marginBottom: 24,
+  content: {
+    padding: spacing.lg,
+    paddingBottom: spacing.xxl,
   },
-  sectionTitle: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#6B7280",
-    marginBottom: 12,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-  },
-  inputRow: {
+  row: {
     flexDirection: "row",
-    gap: 8,
+    gap: spacing.sm,
   },
   input: {
     flex: 1,
-    backgroundColor: "#F3F4F6",
-    borderRadius: 12,
-    padding: 16,
-    fontSize: 16,
-    color: "#1F2937",
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    fontSize: 15,
+    color: colors.text,
   },
-  saveButton: {
-    backgroundColor: "#3B82F6",
-    borderRadius: 12,
-    paddingHorizontal: 20,
-    justifyContent: "center",
+  inlineButton: {
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.md,
   },
-  saveButtonText: {
-    color: "#FFFFFF",
-    fontWeight: "600",
-  },
-  stackedInput: {
-    marginTop: 12,
-  },
-  hint: {
-    fontSize: 12,
-    color: "#6B7280",
-    marginTop: 6,
-    lineHeight: 16,
-  },
-  buttonRow: {
-    marginTop: 12,
-    gap: 8,
-  },
-  button: {
-    borderRadius: 12,
-    padding: 16,
-    alignItems: "center",
-  },
-  connectButton: {
-    backgroundColor: "#3B82F6",
-  },
-  connectButtonText: {
-    color: "#FFFFFF",
-    fontWeight: "600",
-    fontSize: 16,
-  },
-  disconnectButton: {
-    backgroundColor: "#FEE2E2",
-  },
-  disconnectButtonText: {
-    color: "#DC2626",
-    fontWeight: "600",
-    fontSize: 16,
-  },
-  secondaryButton: {
-    backgroundColor: "#F3F4F6",
-  },
-  secondaryButtonText: {
-    color: "#374151",
-    fontWeight: "600",
-    fontSize: 16,
-  },
-  infoRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "#F3F4F6",
-  },
-  infoLabel: {
-    fontSize: 14,
-    color: "#6B7280",
-  },
-  infoValue: {
-    fontSize: 14,
-    color: "#1F2937",
-    fontWeight: "500",
-    maxWidth: "60%",
-    textAlign: "right",
+  stacked: {
+    marginTop: spacing.md,
   },
 });

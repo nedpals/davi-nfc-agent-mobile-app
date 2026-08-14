@@ -1,7 +1,21 @@
 import { useAppStore } from "@/stores";
 import { DISCOVERY_CONFIG, WS_CONFIG } from "@/constants/config";
-import { buildDeviceUrl } from "@/services/agent-url";
+import { buildDeviceUrl, formatHost } from "@/services/agent-url";
 import type { DiscoveredServer } from "@/types/protocol";
+
+const IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
+
+/**
+ * The address to dial out of everything mDNS resolved.
+ *
+ * IPv4 first: the agent binds it, and a link-local IPv6 address resolves on
+ * the same interface but needs a scope the URL cannot carry. The `.local.`
+ * hostname is the last resort, since it depends on the phone's own resolver.
+ */
+export function preferredAddress(server: Pick<DiscoveredServer, "addresses" | "host">): string {
+  const addresses = server.addresses ?? [];
+  return addresses.find((address) => IPV4_RE.test(address)) ?? addresses[0] ?? server.host;
+}
 
 class DiscoveryService {
   private static instance: DiscoveryService;
@@ -9,6 +23,7 @@ class DiscoveryService {
   private isScanning = false;
   private scanTimeout: ReturnType<typeof setTimeout> | null = null;
   private isInitialized = false;
+  private subscribers = 0;
 
   private constructor() {}
 
@@ -73,17 +88,45 @@ class DiscoveryService {
     });
   }
 
+  /**
+   * Register interest in discovery, starting a scan if none is running.
+   *
+   * The scanner screen and the server list both want to be browsing, and they
+   * come and go independently, so interest is counted rather than assumed:
+   * closing one of them must not stop a scan the other still needs.
+   */
   async startDiscovery(): Promise<void> {
-    // Initialize if needed
+    this.subscribers += 1;
+    if (this.subscribers === 1) {
+      await this.beginScan();
+    }
+  }
+
+  /** Drop interest registered by startDiscovery, stopping the last one out. */
+  stopDiscovery(): void {
+    this.subscribers = Math.max(0, this.subscribers - 1);
+    if (this.subscribers === 0) {
+      this.endScan();
+    }
+  }
+
+  /** Scan again from scratch without disturbing who is interested. */
+  async restartDiscovery(): Promise<void> {
+    this.endScan();
+    if (this.subscribers > 0) {
+      await this.beginScan();
+    }
+  }
+
+  private async beginScan(): Promise<void> {
     const initialized = await this.init();
     if (!initialized || !this.zeroconf) {
-      console.warn("[Discovery] Zeroconf not available - using development build required");
+      console.warn("[Discovery] Zeroconf unavailable — a development build is required");
       useAppStore.getState().setSearching(false);
       return;
     }
 
     if (this.isScanning) {
-      console.log("[Discovery] Already scanning");
       return;
     }
 
@@ -94,16 +137,16 @@ class DiscoveryService {
     this.isScanning = true;
 
     try {
-      // Scan for NFC agent services
       this.zeroconf.scan(
         DISCOVERY_CONFIG.SERVICE_TYPE,
         DISCOVERY_CONFIG.PROTOCOL,
         DISCOVERY_CONFIG.DOMAIN
       );
 
-      // Auto-stop after timeout
+      // Browsing indefinitely costs battery for a network that rarely changes,
+      // so the scan lapses and the UI offers to run it again.
       this.scanTimeout = setTimeout(() => {
-        this.stopDiscovery();
+        this.endScan();
       }, DISCOVERY_CONFIG.TIMEOUT);
     } catch (error) {
       console.error("[Discovery] Failed to start scan:", error);
@@ -112,7 +155,7 @@ class DiscoveryService {
     }
   }
 
-  stopDiscovery(): void {
+  private endScan(): void {
     if (this.scanTimeout) {
       clearTimeout(this.scanTimeout);
       this.scanTimeout = null;
@@ -135,11 +178,12 @@ class DiscoveryService {
   }
 
   destroy(): void {
-    this.stopDiscovery();
+    this.subscribers = 0;
+    this.endScan();
     if (this.zeroconf) {
       try {
         this.zeroconf.removeDeviceListeners();
-      } catch (error) {
+      } catch {
         // Ignore cleanup errors
       }
     }
@@ -147,14 +191,15 @@ class DiscoveryService {
 
   // Build WebSocket URL from discovered server
   buildWebSocketUrl(server: DiscoveredServer): string {
-    const host = server.addresses[0] || server.host;
-    const { tls, device_path, path } = server.txtRecords;
+    const host = formatHost(preferredAddress(server));
+    const port = server.port || WS_CONFIG.DEFAULT_PORT;
+    const { tls, device_path, path } = server.txtRecords ?? {};
     const endpoint = device_path || path || WS_CONFIG.DEFAULT_PATH;
 
     // An agent that advertises no tls record predates it. Leaving tls
     // undefined lets the URL builder assume TLS, which is what such an agent
     // serves unless it was started with -auto-tls=false.
-    return buildDeviceUrl(`${host}:${server.port}${endpoint}`, {
+    return buildDeviceUrl(`${host}:${port}${endpoint}`, {
       tls: tls === undefined ? undefined : tls !== "false",
     });
   }

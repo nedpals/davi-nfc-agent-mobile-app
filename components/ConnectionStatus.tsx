@@ -1,75 +1,106 @@
-import type { ConnectionStatus as ConnectionStatusType } from "@/types/protocol";
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { colors, radius, shadows, spacing, typography } from "@/constants/theme";
+import { WS_CONFIG } from "@/constants/config";
+import type { ConnectionStatus as ConnectionStatusType } from "@/types/protocol";
 
 interface ConnectionStatusProps {
   status: ConnectionStatusType;
   serverUrl?: string | null;
   deviceName?: string;
+  error?: string | null;
+  reconnectAttempt?: number;
   isSearching?: boolean;
+  isOnline?: boolean;
   onPress?: () => void;
 }
 
-const statusConfig: Record<
-  ConnectionStatusType,
-  { color: string; label: string }
-> = {
-  disconnected: { color: "#6B7280", label: "Disconnected" },
-  connecting: { color: "#F59E0B", label: "Connecting..." },
-  connected: { color: "#3B82F6", label: "Connected" },
-  registered: { color: "#10B981", label: "Registered" },
-  reconnecting: { color: "#F59E0B", label: "Reconnecting..." },
-  error: { color: "#EF4444", label: "Error" },
+const statusColor: Record<ConnectionStatusType, string> = {
+  disconnected: colors.neutral,
+  connecting: colors.warning,
+  connected: colors.accent,
+  registered: colors.success,
+  reconnecting: colors.warning,
+  error: colors.danger,
 };
 
-export function ConnectionStatus({ status, serverUrl, deviceName, isSearching, onPress }: ConnectionStatusProps) {
-  // Default to disconnected if status is undefined (during store hydration)
-  const config = statusConfig[status] ?? statusConfig.disconnected;
+export function ConnectionStatus({
+  status,
+  serverUrl,
+  deviceName,
+  error,
+  reconnectAttempt = 0,
+  isSearching,
+  isOnline = true,
+  onPress,
+}: ConnectionStatusProps) {
+  const color = statusColor[status] ?? statusColor.disconnected;
+  const busy = status === "connecting" || status === "reconnecting" || !!isSearching;
 
-  const getStatusLabel = () => {
-    if (status === "registered" && deviceName) {
-      return `Registered as "${deviceName}"`;
+  const headline = () => {
+    if (!isOnline) {
+      return "No network";
     }
-    return config.label;
+    switch (status) {
+      case "registered":
+        return deviceName ? `Registered as ${deviceName}` : "Registered";
+      case "connected":
+        return "Connected";
+      case "connecting":
+        return "Connecting…";
+      case "reconnecting":
+        return reconnectAttempt
+          ? `Reconnecting (${reconnectAttempt}/${WS_CONFIG.RECONNECT.MAX_ATTEMPTS})`
+          : "Reconnecting…";
+      case "error":
+        return "Not connected";
+      default:
+        return isSearching ? "Looking for an agent" : "Disconnected";
+    }
   };
 
-  const getSubText = () => {
+  const detail = () => {
+    if (!isOnline) {
+      return "Join the network the agent is on";
+    }
+    if (status === "error" && error) {
+      return error;
+    }
     if (serverUrl && status !== "disconnected") {
       return serverUrl;
     }
     if (isSearching) {
-      return "Searching for servers...";
+      return "Searching the local network…";
     }
-    if (status === "disconnected") {
-      return "Tap to find servers";
-    }
-    return null;
+    return "Tap to choose an agent";
   };
 
-  const subText = getSubText();
-  const showSpinner = isSearching && status === "disconnected";
+  const detailText = detail();
 
   return (
     <TouchableOpacity
       style={styles.container}
       onPress={onPress}
-      activeOpacity={onPress ? 0.7 : 1}
+      disabled={!onPress}
+      activeOpacity={0.75}
+      accessibilityRole={onPress ? "button" : undefined}
+      accessibilityLabel={`Connection: ${headline()}`}
     >
-      {showSpinner ? (
-        <ActivityIndicator size="small" color="#3B82F6" style={styles.spinner} />
+      {busy && isOnline ? (
+        <ActivityIndicator size="small" color={color} style={styles.marker} />
       ) : (
-        <View style={[styles.indicator, { backgroundColor: config.color }]} />
+        <View style={[styles.marker, styles.dot, { backgroundColor: isOnline ? color : colors.danger }]} />
       )}
-      <View style={styles.textContainer}>
-        <Text style={styles.statusText}>{getStatusLabel()}</Text>
-        {subText && (
-          <Text style={styles.serverText} numberOfLines={1}>
-            {subText}
+
+      <View style={styles.text}>
+        <Text style={styles.headline}>{headline()}</Text>
+        {detailText ? (
+          <Text style={styles.detail} numberOfLines={1}>
+            {detailText}
           </Text>
-        )}
+        ) : null}
       </View>
-      {onPress && (
-        <Text style={styles.arrow}>›</Text>
-      )}
+
+      {onPress ? <Text style={styles.chevron}>›</Text> : null}
     </TouchableOpacity>
   );
 }
@@ -78,38 +109,36 @@ const styles = StyleSheet.create({
   container: {
     flexDirection: "row",
     alignItems: "center",
-    padding: 16,
-    backgroundColor: "#F9FAFB",
-    borderRadius: 12,
-    marginHorizontal: 16,
+    padding: spacing.lg,
+    marginHorizontal: spacing.lg,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    ...shadows.card,
   },
-  indicator: {
+  marker: {
     width: 12,
     height: 12,
+    marginRight: spacing.md,
+  },
+  dot: {
     borderRadius: 6,
-    marginRight: 12,
   },
-  spinner: {
-    width: 12,
-    height: 12,
-    marginRight: 12,
-  },
-  textContainer: {
+  text: {
     flex: 1,
   },
-  statusText: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#1F2937",
+  headline: {
+    ...typography.bodyStrong,
+    color: colors.text,
   },
-  serverText: {
-    fontSize: 12,
-    color: "#6B7280",
+  detail: {
+    ...typography.caption,
+    color: colors.textMuted,
     marginTop: 2,
   },
-  arrow: {
-    fontSize: 20,
-    color: "#9CA3AF",
-    marginLeft: 8,
+  chevron: {
+    fontSize: 22,
+    lineHeight: 24,
+    color: colors.textFaint,
+    marginLeft: spacing.sm,
   },
 });
