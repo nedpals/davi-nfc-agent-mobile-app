@@ -63,7 +63,8 @@
           "systemCodes": []
         }
       ],
-      "./plugins/with-android-user-ca-trust"
+      "./plugins/with-android-user-ca-trust",
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true,
