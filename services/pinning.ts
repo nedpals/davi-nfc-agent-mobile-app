@@ -23,13 +23,12 @@ function getNativeModule(): PinningNativeModule | null {
 }
 
 export type PinningStatus =
-  // The agent's key will be checked on this connection.
   | "pinned"
-  // The agent serves no TLS, so there is no key to pin and nothing to verify.
+  // The agent serves no TLS, so there is no key to pin.
   | "not-applicable"
   // A pin is held but this build cannot check it.
   | "unavailable"
-  // A pin is held and the connection is not TLS, so the pin cannot apply.
+  // A pin is held and the connection is cleartext, so it cannot apply.
   | "downgraded";
 
 export interface PinningState {
@@ -37,10 +36,6 @@ export interface PinningState {
   pin?: string;
 }
 
-/**
- * Refused rather than connected. Carries the status so a caller can say which
- * of the two refusals it was.
- */
 export class PinningError extends Error {
   readonly status: PinningStatus;
 
@@ -52,12 +47,9 @@ export class PinningError extends Error {
 }
 
 /**
- * What this build could do with the credential it holds, without dialling
- * anything. Settings asks this so it can say whether the pin is enforceable
- * before a connection is attempted.
- *
- * Reports rather than refuses, and cannot see a downgrade — that depends on the
- * URL, which only `applyPinning` has.
+ * Reports without refusing, for a screen that wants to say whether a pin is
+ * enforceable before anything is dialled. Cannot see a downgrade, which depends
+ * on the URL only `applyPinning` has.
  */
 export function describePinning(credential: AgentCredential | null): PinningState {
   const pin = credential?.publicKeyPin ?? "";
@@ -72,23 +64,17 @@ export function describePinning(credential: AgentCredential | null): PinningStat
 }
 
 /**
- * Arm public-key pinning for the connection about to be opened.
- *
- * Applies to sockets opened after this returns; one already open keeps the
- * trust it was opened with.
- *
- * **Throws rather than returning when a held pin cannot be honoured.** A pin
- * that is not checked is worth nothing, and a connection that proceeds anyway
- * looks exactly like one that verified — which is the failure most likely to be
- * mistaken for security. Refusing is the only outcome that cannot be misread.
+ * Arms pinning for the socket about to be opened, and throws when a held pin
+ * cannot be honoured. A connection that proceeds unverified looks exactly like
+ * one that verified, so refusing is the only outcome that cannot be misread.
  */
 export function applyPinning(credential: AgentCredential | null, wsUrl: string): PinningState {
   const pin = credential?.publicKeyPin ?? "";
   const native = getNativeModule();
 
   if (!pin) {
-    // Clearing matters: a previous connection may have left a pin armed, and
-    // carrying it to an agent that serves no TLS would refuse a valid one.
+    // A previous connection may have left a pin armed, which would refuse a
+    // valid agent that serves no TLS.
     native?.setPin(null);
     return { status: "not-applicable" };
   }

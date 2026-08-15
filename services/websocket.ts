@@ -125,13 +125,8 @@ class WebSocketService {
     const secret = credential?.deviceToken || store.connection.apiSecret;
     const wsUrl = buildDeviceUrl(serverUrl, { secret, port: credential?.agentPort });
 
-    // Arm pinning before the socket is opened — it takes effect for connections
-    // made after this point, not for one already in flight.
-    //
-    // A held pin that cannot be honoured refuses the connection rather than
-    // downgrading it quietly: an unverified socket is indistinguishable from a
-    // verified one once it is open, and the person watching would have no way
-    // to tell.
+    // Before the socket is opened: pinning takes effect for connections made
+    // after this point, not for one already in flight.
     try {
       const pinning = applyPinning(credential, wsUrl);
       store.setPinningState(pinning.status);
@@ -490,15 +485,12 @@ class WebSocketService {
       }
 
       case "deviceTransceiveRequest":
-        // Not awaited, for the same reason as a write: an exchange has its own
-        // deadline, and frames behind it should not wait on the tag.
         void this.handleTransceiveRequest(message as DeviceTransceiveRequestMessage);
         break;
 
+      // Not awaited: a write may take 20s, and blocking the reader that long
+      // would stall heartbeats and every frame behind it.
       case "deviceWriteRequest":
-        // Deliberately not awaited: the agent allows 20s for a write, and
-        // blocking the socket reader for that long would stall heartbeats and
-        // any other frame behind it.
         void this.handleWriteRequest(message as DeviceWriteRequestMessage);
         break;
 
@@ -508,11 +500,8 @@ class WebSocketService {
   }
 
   /**
-   * Carry out a write the agent asked for and report what happened.
-   *
-   * Always answers, including when it refuses: the agent is holding a request
-   * open with a 20 second deadline, and a silent device turns a clear refusal
-   * into a timeout.
+   * Always answers, including when it refuses: the agent holds the request open
+   * for 20 seconds, and silence turns a refusal into a timeout.
    */
   private async handleWriteRequest(message: DeviceWriteRequestMessage): Promise<void> {
     const payload = message.payload;
