@@ -9,6 +9,8 @@ import { ScanButton } from "@/components/ScanButton";
 import { TAG_DRAWER_HEIGHT, TagDrawer } from "@/components/TagDrawer";
 import { colors, radius, shadows, spacing, typography } from "@/constants/theme";
 import { useAutoConnect, useConnection, useNFC, usePairing } from "@/hooks";
+import { hostFromAgentUrl } from "@/services/agent-url";
+import { needsPairing } from "@/services/connection-errors";
 
 /**
  * What the reader is doing, as one answer rather than four overlapping
@@ -40,7 +42,7 @@ export default function ScannerScreen() {
   const { isSearching, isOnline, retry: retryDiscovery } = useAutoConnect();
   // Reads the stored credential once at start, so pairing and pin enforcement
   // are known before anything is dialled.
-  usePairing();
+  const { isPaired } = usePairing();
 
   const {
     isSupported,
@@ -73,7 +75,21 @@ export default function ScannerScreen() {
             ? "stalled"
             : "starting";
 
+  // An agent found and dialled without being asked can still fail for the one
+  // reason trying again never fixes: this device has no credential for it. The
+  // address is already known by then, so the way out is pairing, not a hunt for
+  // the agent in Settings.
+  const pairingWouldFix = !isPaired && needsPairing(error) && !!serverUrl;
+
   const handleRetry = useCallback(() => {
+    if (pairingWouldFix) {
+      router.push({
+        pathname: "/(modals)/pair",
+        params: { host: hostFromAgentUrl(serverUrl!), url: serverUrl! },
+      });
+      return;
+    }
+
     // A known address is worth dialling again directly; without one, finding
     // an agent is the only way back.
     if (serverUrl) {
@@ -81,7 +97,7 @@ export default function ScannerScreen() {
     } else {
       retryDiscovery();
     }
-  }, [serverUrl, retryConnection, retryDiscovery]);
+  }, [pairingWouldFix, router, serverUrl, retryConnection, retryDiscovery]);
 
   return (
     <SafeAreaView style={styles.screen} edges={["top", "left", "right"]}>
@@ -133,6 +149,7 @@ export default function ScannerScreen() {
         // a live connection the card leads to what can be done about it.
         onPress={() => router.push(isConnected ? "/settings" : "/(modals)/server-list")}
         onRetry={status === "error" && isOnline ? handleRetry : undefined}
+        retryLabel={pairingWouldFix ? "Pair" : undefined}
       />
 
       <View style={styles.notices}>

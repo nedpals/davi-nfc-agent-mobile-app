@@ -102,3 +102,19 @@ export function isTerminalConnectionFailure(raw: string | undefined | null): boo
   const haystack = (raw ?? "").toLowerCase();
   return TERMINAL.some((needle) => haystack.includes(needle));
 }
+
+// Failures pairing is the answer to: the agent's certificate is not trusted, or
+// its credential was refused. Both are what an unpaired device gets from an
+// agent serving its own certificate, which is every agent by default.
+const NEEDS_PAIRING = [
+  "trust anchor for certification path",
+  "certpathvalidatorexception",
+  "agent key pin mismatch",
+  "401",
+  "unauthorized",
+];
+
+export function needsPairing(raw: string | undefined | null): boolean {
+  const haystack = (raw ?? "").toLowerCase();
+  return NEEDS_PAIRING.some((needle) => haystack.includes(needle));
+}

@@ -49,7 +49,24 @@ describe("ConnectionStatus", () => {
     const onRetry = jest.fn();
     render(<ConnectionStatus status="error" error="Could not reach the agent" onRetry={onRetry} />);
 
-    fireEvent.press(screen.getByLabelText("Try connecting again"));
+    fireEvent.press(screen.getByLabelText("Try again"));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  // A certificate this device does not trust comes back the same on a retry, so
+  // the card names the thing that would actually change the outcome.
+  it("names the way out rather than always offering a retry", () => {
+    const onRetry = jest.fn();
+    render(
+      <ConnectionStatus
+        status="error"
+        error="This device does not trust the agent's certificate."
+        onRetry={onRetry}
+        retryLabel="Pair"
+      />
+    );
+
+    fireEvent.press(screen.getByLabelText("Pair"));
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
