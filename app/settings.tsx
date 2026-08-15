@@ -26,6 +26,7 @@ import { formatDateTime, truncateMiddle } from "@/utils/format";
 const pinningLabel = {
   pinned: { text: "Enforced", tone: "success" },
   unavailable: { text: "This build cannot verify it", tone: "danger" },
+  downgraded: { text: "Cleartext — pin cannot apply", tone: "danger" },
   "not-applicable": { text: "No key held", tone: "muted" },
 } as const;
 

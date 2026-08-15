@@ -1,6 +1,6 @@
 import * as Haptics from "expo-haptics";
 import { Platform } from "react-native";
-import NfcManager, { Ndef, NfcEvents } from "react-native-nfc-manager";
+import NfcManager, { Ndef, NfcError, NfcEvents } from "react-native-nfc-manager";
 import { useAppStore } from "@/stores";
 
 jest.mock("@/constants/config", () => {
@@ -292,11 +292,12 @@ describe("writing tags", () => {
     expect(manager.ndefHandler.writeNdefMessage).not.toHaveBeenCalled();
   });
 
-  it("reports a locked tag as READ_ONLY rather than a bare failure", async () => {
+  it("refuses a locked tag before attempting the write", async () => {
     const uid = await presentTag([0x04, 0xb5]);
-    (manager.ndefHandler.writeNdefMessage as jest.Mock).mockRejectedValueOnce(
-      new Error("Tag is read-only")
-    );
+    (manager.ndefHandler.getNdefStatus as jest.Mock).mockResolvedValueOnce({
+      status: 3, // ReadOnly
+      capacity: 504,
+    });
 
     const result = await nfcService.handleWriteRequest("req_7", {
       requestID: "req_7",
@@ -307,6 +308,128 @@ describe("writing tags", () => {
 
     expect(result.success).toBe(false);
     expect(result.errorCode).toBe("READ_ONLY");
+    // Asked, not inferred from a failure — so nothing was written.
+    expect(manager.ndefHandler.writeNdefMessage).not.toHaveBeenCalled();
+  });
+
+  it("refuses a message larger than the tag before attempting the write", async () => {
+    const uid = await presentTag([0x04, 0xb9]);
+    (manager.ndefHandler.getNdefStatus as jest.Mock).mockResolvedValueOnce({
+      status: 2,
+      capacity: 2,
+    });
+
+    const result = await nfcService.handleWriteRequest("req_11", {
+      requestID: "req_11",
+      deviceID: "dev",
+      tagUID: uid,
+      ndefBytes: ndefBytes(), // five bytes
+    });
+
+    expect(result.errorCode).toBe("CAPACITY_EXCEEDED");
+    expect(manager.ndefHandler.writeNdefMessage).not.toHaveBeenCalled();
+  });
+
+  it("refuses a tag that does not support NDEF", async () => {
+    const uid = await presentTag([0x04, 0xba]);
+    (manager.ndefHandler.getNdefStatus as jest.Mock).mockResolvedValueOnce({
+      status: 1, // NotSupported
+      capacity: 0,
+    });
+
+    const result = await nfcService.handleWriteRequest("req_12", {
+      requestID: "req_12",
+      deviceID: "dev",
+      tagUID: uid,
+      ndefBytes: ndefBytes(),
+    });
+
+    expect(result.errorCode).toBe("NOT_SUPPORTED");
+  });
+
+  it("writes anyway when the tag cannot report its status", async () => {
+    const uid = await presentTag([0x04, 0xbb]);
+    (manager.ndefHandler.getNdefStatus as jest.Mock).mockRejectedValueOnce(
+      new Error("unsupported tag api")
+    );
+
+    const result = await nfcService.handleWriteRequest("req_13", {
+      requestID: "req_13",
+      deviceID: "dev",
+      tagUID: uid,
+      ndefBytes: ndefBytes(),
+    });
+
+    // A device too old to answer is not a refusal.
+    expect(result.success).toBe(true);
+    expect(manager.ndefHandler.writeNdefMessage).toHaveBeenCalled();
+  });
+
+  it("does not report success when the tag refuses to lock", async () => {
+    const uid = await presentTag([0x04, 0xbc]);
+    // The native call resolves false rather than rejecting, so an unchecked
+    // await would report a lock that never happened.
+    (manager.ndefHandler.makeReadOnly as jest.Mock).mockResolvedValueOnce(false);
+
+    const result = await nfcService.handleWriteRequest("req_14", {
+      requestID: "req_14",
+      deviceID: "dev",
+      tagUID: uid,
+      ndefBytes: ndefBytes(),
+      lock: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.errorCode).toBe("WRITE_FAILED");
+  });
+
+  it("maps a lost tag from the Java exception Android passes through", async () => {
+    const uid = await presentTag([0x04, 0xbd]);
+    (manager.ndefHandler.writeNdefMessage as jest.Mock).mockRejectedValueOnce(
+      new Error("android.nfc.TagLostException: Tag was lost.")
+    );
+
+    const result = await nfcService.handleWriteRequest("req_15", {
+      requestID: "req_15",
+      deviceID: "dev",
+      tagUID: uid,
+      ndefBytes: ndefBytes(),
+    });
+
+    expect(result.errorCode).toBe("TAG_REMOVED");
+  });
+
+  it("maps iOS's typed errors rather than reading their text", async () => {
+    const uid = await presentTag([0x04, 0xbe]);
+    (manager.ndefHandler.writeNdefMessage as jest.Mock).mockRejectedValueOnce(
+      new NfcError.TagNotWritable("whatever this platform calls it")
+    );
+
+    const result = await nfcService.handleWriteRequest("req_16", {
+      requestID: "req_16",
+      deviceID: "dev",
+      tagUID: uid,
+      ndefBytes: ndefBytes(),
+    });
+
+    expect(result.errorCode).toBe("READ_ONLY");
+  });
+
+  it("leaves an unrecognised failure retryable", async () => {
+    const uid = await presentTag([0x04, 0xbf]);
+    (manager.ndefHandler.writeNdefMessage as jest.Mock).mockRejectedValueOnce(
+      new Error("something nobody has seen before")
+    );
+
+    const result = await nfcService.handleWriteRequest("req_17", {
+      requestID: "req_17",
+      deviceID: "dev",
+      tagUID: uid,
+      ndefBytes: ndefBytes(),
+    });
+
+    // WRITE_FAILED is retryable; guessing a final code would strand the agent.
+    expect(result.errorCode).toBe("WRITE_FAILED");
   });
 
   it("falls back to the record form when the agent sends no encoded bytes", async () => {

@@ -5,8 +5,10 @@ An Expo app that turns a phone into a remote NFC reader for the
 tags and streams them to the agent, which broadcasts them to the agent's own
 clients.
 
-The phone is a read-only sensor: it reports tags, and the agent does not drive
-it. Writing, locking and erasing are hardware-reader operations.
+On Android the agent can also drive it: writing a tag, locking one, and
+exchanging raw commands with it. On iOS the phone stays a read-only sensor,
+because CoreNFC has no held tag for the agent to act on — see
+[Writing tags](#writing-tags).
 
 ## Running it
 
@@ -136,10 +138,22 @@ Since RN offers no injection point on iOS, the module swizzles
 variant. That avoids forking React Native or replacing its WebSocket module, at
 the cost of depending on an initializer signature RN could change.
 
-**When it cannot be enforced** — in Expo Go, or any build without the module,
-`applyPinning` reports `unavailable`. The connection is still made and is *not*
-verified; Settings says so, and the socket layer logs a warning rather than
-letting it read as secure.
+**When it cannot be enforced, the connection is refused.** A pin that is not
+checked is worth nothing, and an unverified socket is indistinguishable from a
+verified one once it is open — a warning nobody reads is not a control. So a
+held pin that cannot be honoured fails the connect rather than downgrading it:
+
+- **No native module** — Expo Go, or a build predating it. Nothing else works
+  there either, since discovery and scanning are native too, so this costs no
+  working setup.
+- **A cleartext URL for an agent paired over TLS.** The pin cannot apply to
+  `ws://`, and reporting the connection as pinned would be a lie. If the agent
+  genuinely runs with `-auto-tls=false` now, its identity basis changed —
+  unpair and pair again.
+
+Settings reports which of the two it is. `describePinning` answers the same
+question without dialling anything, so the screen can say whether a pin is
+enforceable before a connection is attempted; only `applyPinning` refuses.
 
 ## Protocol
 
@@ -230,9 +244,23 @@ translation; the record form is the fallback for agents that send only records.
 
 `idempotencyKey` is honoured: the same key reports the first outcome instead of
 writing again, because a repeated request means a lost response rather than a
-second write. Failures answer with the agent's own codes — `READ_ONLY`,
-`CAPACITY_EXCEEDED`, `TAG_REMOVED` — so it can tell a refusal from a retry, and
-a refusal is always answered rather than left to time out.
+second write.
+
+**A write the tag cannot accept is refused before it is attempted.**
+`getNdefStatus` reports whether the tag is locked, whether it speaks NDEF, and
+how much it holds — so `READ_ONLY`, `NOT_SUPPORTED` and `CAPACITY_EXCEEDED` are
+answers rather than inferences. Those are exactly the codes the agent treats as
+final, and guessing one wrong is what makes it retry something that can never
+work. A tag too old to report its status is written anyway and reports whatever
+happens.
+
+Everything else is mapped from three sources, in descending order of certainty:
+the typed errors the library raises from iOS's numeric `NFCError` codes, its own
+literal error strings, and the Java exception class names Android passes through
+as text — Android hands back `ex.toString()`, so `android.nfc.TagLostException`
+is a steadier thing to match than the message after it. An unrecognised failure
+stays `WRITE_FAILED`, which is retryable: the agent may try again rather than
+being told something is impossible on a guess.
 
 ## Transceive
 

@@ -2,7 +2,14 @@ import { TAG_DEDUPE_WINDOW } from "@/constants/config";
 import { useAppStore } from "@/stores";
 import * as Haptics from "expo-haptics";
 import { AppState, type AppStateStatus, Platform } from "react-native";
-import NfcManager, { Ndef, NfcAdapter, NfcEvents, NfcTech } from "react-native-nfc-manager";
+import NfcManager, {
+  Ndef,
+  NdefStatus,
+  NfcAdapter,
+  NfcError,
+  NfcEvents,
+  NfcTech,
+} from "react-native-nfc-manager";
 import {
   base64ToBytes,
   base64ToString,
@@ -27,7 +34,6 @@ export interface NFCInitResult {
   enabled: boolean;
 }
 
-/** An outcome the agent can act on, rather than an opaque failure. */
 export class NFCOperationError extends Error {
   readonly code: DeviceErrorCode;
 
@@ -104,50 +110,117 @@ function toNdefRecord(record: NDEFRecordInput) {
   }
 }
 
-/**
- * Map what the platform reports onto the agent's taxonomy.
- *
- * The library surfaces most failures as a message rather than a code, so this
- * reads the text. An unrecognised failure stays WRITE_FAILED, which the agent
- * treats as retryable — the honest answer when the cause is unknown.
- */
-function classifyWriteError(error: unknown): DeviceErrorCode {
-  const message = describeNfcError(error).toLowerCase();
+// The library's own error strings, raised before it reaches the tag. Exact
+// values from its Android module rather than prose to match against.
+const MODULE_ERRORS: Record<string, DeviceErrorCode> = {
+  "no tech request available": "TAG_NOT_CONNECTED",
+  "you should requestTagEvent first": "TAG_NOT_CONNECTED",
+  "no reference available": "TAG_NOT_CONNECTED",
+  "unsupported tag api": "NOT_SUPPORTED",
+  "no nfc support": "NOT_SUPPORTED",
+  "transceive fail": "TRANSCEIVE_FAILED",
+};
 
-  if (message.includes("read-only") || message.includes("read only")) {
-    return "READ_ONLY";
-  }
-  if (message.includes("not enough space") || message.includes("too large")) {
-    return "CAPACITY_EXCEEDED";
-  }
-  if (message.includes("tag was lost") || message.includes("connection lost")) {
-    return "TAG_REMOVED";
-  }
-  if (message.includes("not supported") || message.includes("not ndef")) {
-    return "NOT_SUPPORTED";
-  }
-  return "WRITE_FAILED";
-}
-
-/** Same shape as classifyWriteError, for the failures an exchange reports. */
-function classifyTransceiveError(error: unknown): DeviceErrorCode {
-  const message = describeNfcError(error).toLowerCase();
-
-  if (message.includes("tag was lost") || message.includes("connection lost")) {
-    return "TAG_REMOVED";
-  }
-  if (message.includes("not supported") || message.includes("tech")) {
-    return "NOT_SUPPORTED";
-  }
-  return "TRANSCEIVE_FAILED";
-}
+// Android reports a failure as the Java exception's toString(), which begins
+// with the fully-qualified class name — a far steadier thing to match on than
+// the message that follows it.
+const JAVA_EXCEPTIONS: [string, DeviceErrorCode][] = [
+  ["android.nfc.TagLostException", "TAG_REMOVED"],
+  ["android.nfc.FormatException", "INVALID_DATA"],
+  ["java.lang.IllegalStateException", "TAG_NOT_CONNECTED"],
+];
 
 /**
- * Fail an exchange that outlives its budget.
- *
- * The underlying call has no cancel, so the losing promise is left to settle on
- * its own; what matters is that the caller stops waiting when it said it would.
+ * The three outcomes the agent treats as final, asked rather than inferred from
+ * whatever text a failed write produced. A tag too old to answer is written
+ * anyway rather than refused on a missing feature.
  */
+async function assertTagAccepts(bytes: number[]): Promise<void> {
+  let status: { status: NdefStatus; capacity: number };
+  try {
+    status = await NfcManager.ndefHandler.getNdefStatus();
+  } catch {
+    return;
+  }
+
+  if (status.status === NdefStatus.NotSupported) {
+    throw new NFCOperationError("This tag does not support NDEF", "NOT_SUPPORTED");
+  }
+
+  if (status.status === NdefStatus.ReadOnly) {
+    throw new NFCOperationError("This tag is locked", "READ_ONLY");
+  }
+
+  if (status.capacity > 0 && bytes.length > status.capacity) {
+    throw new NFCOperationError(
+      `Message is ${bytes.length} bytes and the tag holds ${status.capacity}`,
+      "CAPACITY_EXCEEDED",
+    );
+  }
+}
+
+/**
+ * The native call reports refusal by resolving `false` rather than rejecting,
+ * so an unchecked await reports a lock that never happened.
+ */
+async function lockTag(): Promise<void> {
+  let locked: unknown;
+  try {
+    locked = await NfcManager.ndefHandler.makeReadOnly();
+  } catch (error) {
+    throw new NFCOperationError(describeNfcError(error), classifyNfcError(error, "WRITE_FAILED"));
+  }
+
+  if (locked === false) {
+    throw new NFCOperationError("The tag refused to be locked", "WRITE_FAILED");
+  }
+}
+
+/**
+ * Three sources in descending order of certainty: iOS's typed errors, the
+ * library's own literal strings, then Android's Java exception names.
+ *
+ * `fallback` is retryable in both cases it is used, which is the honest answer
+ * when the cause is unknown — better than declaring something impossible on a
+ * guess.
+ */
+function classifyNfcError(error: unknown, fallback: DeviceErrorCode): DeviceErrorCode {
+  // iOS turns its numeric NFCError codes into these, so they are exact.
+  if (error instanceof NfcError.TagNotWritable) return "READ_ONLY";
+  if (error instanceof NfcError.TagSizeTooSmall) return "CAPACITY_EXCEEDED";
+  if (error instanceof NfcError.ZeroLengthMessage) return "INVALID_DATA";
+  if (error instanceof NfcError.PacketTooLong) return "INVALID_DATA";
+  if (error instanceof NfcError.TagConnectionLost) return "TAG_REMOVED";
+  if (error instanceof NfcError.TagNotConnected) return "TAG_NOT_CONNECTED";
+  if (error instanceof NfcError.SessionInvalidated) return "TAG_NOT_CONNECTED";
+  // The person dismissed the scan sheet, or the radio is off. Neither is a
+  // property of the tag, and both clear on their own, so they stay retryable.
+  if (error instanceof NfcError.UserCancel) return "TAG_NOT_CONNECTED";
+  if (error instanceof NfcError.RadioDisabled) return "TAG_NOT_CONNECTED";
+  if (error instanceof NfcError.Timeout) return "TIMEOUT";
+  if (error instanceof NfcError.UnsupportedFeature) return "NOT_SUPPORTED";
+  if (error instanceof NfcError.TagUpdateFailure) return "WRITE_FAILED";
+  if (error instanceof NfcError.TagResponseError) return "TRANSCEIVE_FAILED";
+  if (error instanceof NfcError.RetryExceeded) return "TRANSCEIVE_FAILED";
+
+  const message = describeNfcError(error);
+
+  const moduleError = MODULE_ERRORS[message.trim().toLowerCase()];
+  if (moduleError) {
+    return moduleError;
+  }
+
+  for (const [exception, code] of JAVA_EXCEPTIONS) {
+    if (message.startsWith(exception)) {
+      return code;
+    }
+  }
+
+  return fallback;
+}
+
+// The underlying call cannot be cancelled, so the abandoned exchange is left to
+// settle on its own; what matters is that the caller stops waiting on time.
 function withDeadline<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -217,10 +290,8 @@ class NFCService {
 
       this.setupAppStateListener();
 
-      // Registered here rather than at module scope, and from this side rather
-      // than the socket layer importing this one: that direction would close a
-      // cycle, since this module already depends on that one to send what it
-      // scans.
+      // Registered from this side because the socket layer importing this one
+      // would close a cycle: this module already imports it to send scans.
       websocketService.setWriteHandler((requestID, payload) =>
         this.handleWriteRequest(requestID, payload)
       );
@@ -434,61 +505,43 @@ class NFCService {
   }
 
   /**
-   * Whether this device can write a tag the agent asks it to.
-   *
-   * Android only. Writing needs a technology session over a tag already in the
-   * field, which Android's reader mode provides; CoreNFC has no equivalent —
-   * its sessions are user-initiated and modal, so an agent-driven write cannot
-   * complete without the person presenting the tag to a system sheet.
+   * Android only, as every agent-driven operation is. They need a technology
+   * session over a tag already in the field, which reader mode provides;
+   * CoreNFC sessions are user-initiated and modal, so there is no held tag for
+   * the agent to act on.
    */
   canWrite(): boolean {
     return Platform.OS === "android";
   }
 
-  /**
-   * Whether this device can exchange raw commands with a tag.
-   *
-   * Android only, and for the same reason as writing: the exchange runs over a
-   * technology session on a tag already in the field.
-   */
   canTransceive(): boolean {
     return Platform.OS === "android";
   }
 
-  /**
-   * Write an encoded NDEF message to the tag currently in the field.
-   *
-   * `requestTechnology` reuses the reader-mode registration this service
-   * already holds rather than opening one of its own, so the scan loop keeps
-   * running and the matching cancel does not tear it down. That is why writing
-   * does not have to stop and restart scanning.
-   *
-   * Throws a NFCOperationError carrying the agent's error code.
-   */
+  /** Throws NFCOperationError carrying the agent's error code. */
   async writeNdef(bytes: number[], options: { lock?: boolean } = {}): Promise<void> {
     if (!this.canWrite()) {
       throw new NFCOperationError("This device cannot write tags", "NOT_SUPPORTED");
     }
 
     await this.withTechnology(NfcTech.Ndef, async () => {
+      await assertTagAccepts(bytes);
+
       try {
         await NfcManager.ndefHandler.writeNdefMessage(bytes);
-
-        if (options.lock) {
-          await NfcManager.ndefHandler.makeReadOnly();
-        }
       } catch (error) {
-        throw new NFCOperationError(describeNfcError(error), classifyWriteError(error));
+        throw new NFCOperationError(describeNfcError(error), classifyNfcError(error, "WRITE_FAILED"));
+      }
+
+      if (options.lock) {
+        await lockTag();
       }
     });
   }
 
   /**
-   * Exchange raw bytes with the tag in the field and return its reply.
-   *
-   * `raw` selects framing-level exchange over APDU-level, which is a different
-   * technology and so a different session — a tag that answers one may not
-   * answer the other.
+   * `raw` selects framing-level exchange over APDU-level — a different
+   * technology, so a tag answering one may not answer the other.
    */
   async transceive(
     bytes: number[],
@@ -515,7 +568,10 @@ class NFCService {
         if (error instanceof NFCOperationError) {
           throw error;
         }
-        throw new NFCOperationError(describeNfcError(error), classifyTransceiveError(error));
+        throw new NFCOperationError(
+          describeNfcError(error),
+          classifyNfcError(error, "TRANSCEIVE_FAILED"),
+        );
       }
     });
   }
@@ -549,7 +605,6 @@ class NFCService {
     }
   }
 
-  /** The UID of the tag the reader is currently holding, if any. */
   currentTagUid(): string | null {
     return useAppStore.getState().nfc.lastTag?.uid ?? null;
   }
@@ -589,11 +644,10 @@ class NFCService {
   }
 
   /**
-   * Carry out a write the agent asked for, and describe the outcome in its
-   * terms. Refusals are outcomes too — the agent is waiting on this.
+   * Refusals are outcomes too: the agent is holding a request open on this.
    *
-   * The person holding the phone is part of this: the tag has to stay in the
-   * field for the write to land, so the operation is published to the store
+   * The person holding the phone is part of it — the tag has to stay in the
+   * field for the write to land — so the operation is published to the store
    * before it starts rather than only reported to the agent afterwards.
    */
   async handleWriteRequest(
@@ -649,11 +703,8 @@ class NFCService {
   }
 
   /**
-   * Exchange raw bytes with the tag on the agent's behalf.
-   *
-   * Unlike a write there is no idempotency key, and rightly so: an exchange is
-   * a question to the tag, and the agent cannot know whether repeating one is
-   * safe. Repeating is its decision to make.
+   * No idempotency key, unlike a write: an exchange is a question to the tag,
+   * and whether repeating one is safe is the agent's call.
    */
   async handleTransceiveRequest(
     requestID: string,

@@ -66,7 +66,9 @@ jest.mock("react-native-nfc-manager", () => {
       cancelTechnologyRequest: jest.fn(() => Promise.resolve()),
       ndefHandler: {
         writeNdefMessage: jest.fn(() => Promise.resolve()),
-        makeReadOnly: jest.fn(() => Promise.resolve()),
+        // Resolves true/false rather than rejecting, as the native call does.
+        makeReadOnly: jest.fn(() => Promise.resolve(true)),
+        getNdefStatus: jest.fn(() => Promise.resolve({ status: 2, capacity: 504 })),
       },
       isoDepHandler: { transceive: jest.fn(() => Promise.resolve([0x90, 0x00])) },
       nfcAHandler: { transceive: jest.fn(() => Promise.resolve([0x0a, 0x0b])) },
@@ -85,6 +87,25 @@ jest.mock("react-native-nfc-manager", () => {
       encodeMessage: jest.fn((records) => records.map((_, index) => index)),
     },
     NfcTech: { Ndef: "Ndef", NfcA: "NfcA", IsoDep: "IsoDep" },
+    NdefStatus: { NotSupported: 1, ReadWrite: 2, ReadOnly: 3 },
+    // The typed errors the library raises from iOS's numeric NFCError codes.
+    NfcError: (() => {
+      class NfcErrorBase extends Error {}
+      const named = [
+        "UnsupportedFeature", "SecurityViolation", "InvalidParameter",
+        "InvalidParameterLength", "ParameterOutOfBound", "RadioDisabled",
+        "TagConnectionLost", "RetryExceeded", "TagResponseError",
+        "SessionInvalidated", "TagNotConnected", "PacketTooLong",
+        "UserCancel", "Timeout", "Unexpected", "SystemBusy",
+        "FirstNdefInvalid", "InvalidConfiguration", "TagNotWritable",
+        "TagUpdateFailure", "TagSizeTooSmall", "ZeroLengthMessage",
+      ];
+      const errors = { NfcErrorBase };
+      for (const name of named) {
+        errors[name] = class extends NfcErrorBase {};
+      }
+      return errors;
+    })(),
     NfcEvents: { DiscoverTag: "NfcManagerDiscoverTag" },
     NfcAdapter: {
       FLAG_READER_NFC_A: 1,
