@@ -1,4 +1,5 @@
-import { act, renderWithProviders as render, screen, waitFor } from "@/test-utils/render";
+import { act, fireEvent, renderWithProviders as render, screen, waitFor } from "@/test-utils/render";
+import { Alert } from "react-native";
 import * as SecureStore from "expo-secure-store";
 import { useAppStore } from "@/stores";
 import type { DiscoveredServer } from "@/types/protocol";
@@ -28,10 +29,33 @@ jest.mock("@/services/discovery", () => ({
 
 const update = (change: () => void) => act(() => { change(); });
 
+// The NFC service registers its handlers with this on start-up, so the mock
+// has to offer everything it reaches for, not only what the screens call.
+jest.mock("@/services/websocket", () => ({
+  websocketService: {
+    connectAndRegister: jest.fn(() => Promise.resolve()),
+    disconnect: jest.fn(),
+    retry: jest.fn(() => Promise.resolve()),
+    isRegistered: jest.fn(() => false),
+    sendTagScanned: jest.fn(),
+    sendTagRemoved: jest.fn(),
+    setWriteHandler: jest.fn(),
+    setTransceiveHandler: jest.fn(),
+  },
+}));
+
+ 
+const { websocketService } = require("@/services/websocket");
+
 beforeEach(() => {
   useAppStore.getState().reset();
   jest.clearAllMocks();
+  jest.spyOn(Alert, "alert").mockImplementation(() => {});
   (SecureStore.getItemAsync as jest.Mock).mockResolvedValue(null);
+});
+
+afterEach(() => {
+  jest.restoreAllMocks();
 });
 
 describe("scanner screen", () => {
@@ -84,6 +108,24 @@ describe("scanner screen", () => {
     await waitFor(() => expect(screen.getByLabelText("Try connecting again")).toBeTruthy());
   });
 
+  it("leads to the agent list when there is nothing connected", async () => {
+    render(<ScannerScreen />);
+
+    fireEvent.press(screen.getByLabelText(/Connection:/));
+    expect(mockRouter.push).toHaveBeenCalledWith("/(modals)/server-list");
+  });
+
+  it("leads to what can be done about a live connection instead", async () => {
+    render(<ScannerScreen />);
+    update(() => {
+      useAppStore.getState().setConnectionStatus("registered");
+    });
+
+    await waitFor(() => expect(screen.getByText(/^Registered/)).toBeTruthy());
+    fireEvent.press(screen.getByLabelText(/Connection:/));
+    expect(mockRouter.push).toHaveBeenCalledWith("/settings");
+  });
+
   it("names the agent it is registered with", async () => {
     render(<ScannerScreen />);
     update(() => {
@@ -122,6 +164,29 @@ describe("server list screen", () => {
     render(<ServerListScreen />);
 
     await waitFor(() => expect(screen.getByText("No agents found")).toBeTruthy());
+  });
+
+  // An agent on a network without mDNS never appears in the list, and this
+  // screen used to point at another one rather than take the address itself.
+  it("dials an address typed in by hand", async () => {
+    render(<ServerListScreen />);
+
+    fireEvent.changeText(screen.getByPlaceholderText("192.168.1.100:9470"), "192.168.1.5:9470");
+    fireEvent.press(screen.getByText("Connect"));
+
+    await waitFor(() =>
+      expect(websocketService.connectAndRegister).toHaveBeenCalledWith("192.168.1.5:9470")
+    );
+    expect(mockRouter.back).toHaveBeenCalled();
+  });
+
+  it("says what is missing rather than dialling nothing", async () => {
+    render(<ServerListScreen />);
+
+    fireEvent.press(screen.getByText("Connect"));
+
+    await waitFor(() => expect(Alert.alert).toHaveBeenCalled());
+    expect(websocketService.connectAndRegister).not.toHaveBeenCalled();
   });
 
   it("lists an agent that answered", async () => {

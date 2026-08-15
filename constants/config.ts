@@ -38,6 +38,11 @@ export const WS_CONFIG = {
 // measured limit so the agent's own margin is not the only one.
 export const IOS_TAG_HOLD_MS = 18_000;
 
+// How long mDNS is given to answer before the app falls back to the address it
+// already knows. Discovery resolves in well under this on a network that
+// carries it, and never will on one that does not.
+export const STORED_ADDRESS_GRACE = 4000;
+
 // How many scans the app keeps, and how many of those survive a restart.
 export const HISTORY_LIMIT = 50;
 export const PERSISTED_HISTORY_LIMIT = 20;

@@ -85,6 +85,10 @@ class WebSocketService {
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   private currentUrl: string | null = null;
   private isManualDisconnect = false;
+  // Whether a connection that never opened is worth camping on. An address the
+  // app was told to try once — a remembered one, say — should be let go rather
+  // than spending the whole reconnect budget on it.
+  private retryOnFailure = true;
   // Settles the connect() call belonging to the live socket, so a connection
   // that is torn down before it opens rejects instead of hanging.
   private settleConnect: ((error?: Error) => void) | null = null;
@@ -139,6 +143,7 @@ class WebSocketService {
     // carries the credential, and this is what gets persisted and reused on
     // reconnect.
     this.currentUrl = serverUrl;
+    this.retryOnFailure = true;
     this.offeredVersion = 1;
     this.negotiatedVersion = 0;
 
@@ -230,9 +235,20 @@ class WebSocketService {
     });
   }
 
-  /** Connect and register in one step, which is what every caller wants. */
-  async connectAndRegister(serverUrl: string): Promise<void> {
+  /**
+   * Connect and register in one step, which is what every caller wants.
+   *
+   * `retryOnFailure: false` makes this a single attempt: an address that never
+   * answers is dropped instead of held onto, so whatever else was looking for
+   * an agent can carry on. A connection that does come up is retried as usual
+   * if it later drops.
+   */
+  async connectAndRegister(
+    serverUrl: string,
+    { retryOnFailure = true }: { retryOnFailure?: boolean } = {},
+  ): Promise<void> {
     await this.connect(serverUrl);
+    this.retryOnFailure = retryOnFailure;
 
     try {
       await this.registerDevice();
@@ -313,6 +329,9 @@ class WebSocketService {
     store.setProtocolVersion(this.negotiatedVersion);
     store.setConnectionStatus("registered");
     store.setConnectionError(null);
+    // The address answered, so a later drop is worth reconnecting to even if
+    // this attempt was only meant to be a single try.
+    this.retryOnFailure = true;
     store.setLastConnected(new Date());
     this.resetReconnect();
     this.startHeartbeat();
@@ -658,6 +677,16 @@ class WebSocketService {
     store.setDeviceId(null);
 
     if (this.isManualDisconnect) {
+      store.setConnectionStatus("disconnected");
+      return;
+    }
+
+    if (!this.retryOnFailure) {
+      // A single attempt that came to nothing. Left disconnected rather than
+      // failed: nothing is wrong with the app, this address simply did not
+      // answer, and something else is still looking.
+      this.retryOnFailure = true;
+      this.currentUrl = null;
       store.setConnectionStatus("disconnected");
       return;
     }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
+import { STORED_ADDRESS_GRACE } from "@/constants/config";
 import { useAppStore } from "@/stores";
 import { discoveryService } from "@/services/discovery";
 import { websocketService } from "@/services/websocket";
@@ -17,6 +18,7 @@ const RETRY_COOLDOWN = 15000;
 export function useAutoConnect() {
   const status = useAppStore((state) => state.connection.status);
   const manualDisconnect = useAppStore((state) => state.connection.manualDisconnect);
+  const serverUrl = useAppStore((state) => state.connection.serverUrl);
   const servers = useAppStore((state) => state.discovery.discoveredServers);
   const isSearching = useAppStore((state) => state.discovery.isSearching);
   const { isOnline } = useNetworkStatus();
@@ -28,6 +30,26 @@ export function useAutoConnect() {
   // agent again is now discovery's job.
   const isIdle = status === "disconnected" || status === "error";
   const shouldSearch = isIdle && !manualDisconnect && isOnline;
+
+  /** Whether this address was tried recently enough not to try it again. */
+  const onCooldown = (url: string) => {
+    const previous = lastAttempt.current;
+    return previous?.url === url && Date.now() - previous.at < RETRY_COOLDOWN;
+  };
+
+  const dial = useCallback((url: string, options: { retryOnFailure?: boolean } = {}) => {
+    inFlight.current = true;
+    lastAttempt.current = { url, at: Date.now() };
+
+    // Discovery is released by its own effect once the status leaves idle;
+    // stopping it here as well would drop a subscription this hook never took.
+    websocketService
+      .connectAndRegister(url, options)
+      .catch((error) => console.error("[AutoConnect] Failed to connect:", error))
+      .finally(() => {
+        inFlight.current = false;
+      });
+  }, []);
 
   useEffect(() => {
     if (!shouldSearch) {
@@ -47,27 +69,37 @@ export function useAutoConnect() {
       return;
     }
 
-    const server = servers[0];
-    const url = discoveryService.buildWebSocketUrl(server);
-    const previous = lastAttempt.current;
+    const url = discoveryService.buildWebSocketUrl(servers[0]);
 
     // Without this, an agent that is advertising but refusing connections would
     // be dialled again the moment its own retry budget ran out.
-    if (previous?.url === url && Date.now() - previous.at < RETRY_COOLDOWN) {
+    if (onCooldown(url)) {
       return;
     }
 
-    inFlight.current = true;
-    lastAttempt.current = { url, at: Date.now() };
+    dial(url);
+  }, [shouldSearch, servers, dial]);
 
-    websocketService
-      .connectAndRegister(url)
-      .then(() => discoveryService.stopDiscovery())
-      .catch((error) => console.error("[AutoConnect] Failed to connect:", error))
-      .finally(() => {
-        inFlight.current = false;
-      });
-  }, [shouldSearch, servers]);
+  // A network that blocks mDNS never answers, and the app would sit searching
+  // for an agent whose address it already knows. Discovery gets first refusal —
+  // it is the only way to notice an agent that has moved — and the remembered
+  // address is tried once if nothing answers.
+  useEffect(() => {
+    if (!shouldSearch || inFlight.current || !serverUrl || servers.length > 0) {
+      return;
+    }
+    if (onCooldown(serverUrl)) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      // A single attempt: an address that has gone stale must not swallow the
+      // reconnect budget that belongs to an agent the app can still find.
+      dial(serverUrl, { retryOnFailure: false });
+    }, STORED_ADDRESS_GRACE);
+
+    return () => clearTimeout(timer);
+  }, [shouldSearch, serverUrl, servers.length, dial]);
 
   const retry = useCallback(() => {
     lastAttempt.current = null;

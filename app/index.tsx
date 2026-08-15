@@ -32,6 +32,7 @@ export default function ScannerScreen() {
     serverUrl,
     deviceName,
     isRegistered,
+    isConnected,
     error,
     reconnectAttempt,
     retry: retryConnection,
@@ -126,7 +127,9 @@ export default function ScannerScreen() {
         reconnectAttempt={reconnectAttempt}
         isSearching={isSearching}
         isOnline={isOnline}
-        onPress={() => router.push("/(modals)/server-list")}
+        // Choosing an agent is only useful when there is not one already; with
+        // a live connection the card leads to what can be done about it.
+        onPress={() => router.push(isConnected ? "/settings" : "/(modals)/server-list")}
         onRetry={status === "error" && isOnline ? handleRetry : undefined}
       />
 

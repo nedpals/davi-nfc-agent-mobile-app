@@ -5,12 +5,16 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  KeyboardAvoidingView,
+  Platform,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { Button } from "@/components/Button";
 import { EmptyState } from "@/components/EmptyState";
 import { ModalHeader } from "@/components/ModalHeader";
 import { colors, fontFamily, radius, shadows, spacing, typography } from "@/constants/theme";
@@ -62,21 +66,47 @@ function ServerItem({
 export default function ServerListScreen() {
   const router = useRouter();
   const { servers, isSearching, refresh } = useServerDiscovery({ autoStart: true });
-  const { connectToServer } = useConnection();
+  const { connect, connectToServer } = useConnection();
   const [connectingTo, setConnectingTo] = useState<string | null>(null);
+  const [address, setAddress] = useState("");
+  const [isDialling, setIsDialling] = useState(false);
 
-  const handleSelect = async (server: DiscoveredServer) => {
-    setConnectingTo(server.name);
+  const dial = async (attempt: () => Promise<void>) => {
     try {
-      await connectToServer(server);
+      await attempt();
       router.back();
     } catch (error) {
       Alert.alert(
         "Could not connect",
         error instanceof Error ? error.message : "The agent did not answer."
       );
+    }
+  };
+
+  const handleSelect = async (server: DiscoveredServer) => {
+    setConnectingTo(server.name);
+    try {
+      await dial(() => connectToServer(server));
     } finally {
       setConnectingTo(null);
+    }
+  };
+
+  // An agent on a network that carries no mDNS never appears in the list, and
+  // sending someone to another screen to type its address is a detour this
+  // screen can absorb.
+  const handleDial = async () => {
+    const target = address.trim();
+    if (!target) {
+      Alert.alert("Address required", "Enter the agent's address, such as 192.168.1.100:9470.");
+      return;
+    }
+
+    setIsDialling(true);
+    try {
+      await dial(() => connect(target));
+    } finally {
+      setIsDialling(false);
     }
   };
 
@@ -125,7 +155,31 @@ export default function ServerListScreen() {
         }
       />
 
-      <Text style={styles.footer}>Not listed? Enter the address by hand in Settings.</Text>
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <View style={styles.manual}>
+          <Text style={styles.manualLabel}>Not listed? Enter its address</Text>
+          <View style={styles.manualRow}>
+            <TextInput
+              style={styles.input}
+              value={address}
+              onChangeText={setAddress}
+              placeholder="192.168.1.100:9470"
+              placeholderTextColor={colors.textFaint}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              returnKeyType="go"
+              onSubmitEditing={handleDial}
+            />
+            <Button
+              label={isDialling ? "Connecting…" : "Connect"}
+              onPress={handleDial}
+              loading={isDialling}
+              style={styles.manualButton}
+            />
+          </View>
+        </View>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -195,11 +249,34 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
     overflow: "hidden",
   },
-  footer: {
-    ...typography.caption,
-    color: colors.textFaint,
-    textAlign: "center",
+  manual: {
     paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.lg,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+    backgroundColor: colors.surface,
+    gap: spacing.sm,
+  },
+  manualLabel: {
+    ...typography.caption,
+    color: colors.textMuted,
+  },
+  manualRow: {
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
+  input: {
+    flex: 1,
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    fontSize: 15,
+    color: colors.text,
+  },
+  manualButton: {
+    paddingHorizontal: spacing.xl,
     paddingVertical: spacing.md,
   },
 });

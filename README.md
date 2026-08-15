@@ -54,6 +54,17 @@ app browses for it and auto-connects when exactly one agent is found, taking the
 port and path from the advertisement. Whether the agent is serving TLS is not
 advertised — the app assumes it is, and pairing reports it for certain.
 
+**When mDNS does not carry.** Plenty of networks drop multicast, and on one of
+those the app would sit looking for an agent whose address it is already
+holding. Discovery gets first refusal — it is the only way to notice an agent
+that has moved — and if nothing answers within a few seconds the remembered
+address is dialled once. Once, deliberately: an address that has gone stale
+must not spend the reconnect budget that belongs to an agent still findable, so
+a single attempt that fails leaves the app searching rather than camped on it.
+**Agents nearby** also takes an address typed in by hand, so an agent that
+cannot be discovered can still be reached from the screen that failed to find
+it.
+
 Browsing runs only while there is nothing to talk to, and starts again by
 itself once the socket layer has spent its reconnect budget — except after
 **Disconnect**, which is taken as meaning it. An agent that refuses a
