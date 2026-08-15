@@ -116,7 +116,28 @@ describe("scanner screen", () => {
       useAppStore.getState().failConnection("Could not reach the agent");
     });
 
-    await waitFor(() => expect(screen.getByLabelText("Try connecting again")).toBeTruthy());
+    await waitFor(() => expect(screen.getByLabelText("Try again")).toBeTruthy());
+  });
+
+  // The agent was found and dialled without being asked, so by the time it
+  // fails for want of a credential the address is already known — offering a
+  // retry there would repeat a failure rather than resolve it.
+  it("offers pairing, not a retry, when that is what the failure needs", async () => {
+    render(<ScannerScreen />);
+    update(() => {
+      useAppStore.getState().setServerUrl("192.168.1.5:9470");
+      useAppStore
+        .getState()
+        .failConnection("java.security.cert.CertPathValidatorException: Trust anchor for certification path not found.");
+    });
+
+    await waitFor(() => expect(screen.getByLabelText("Pair")).toBeTruthy());
+    fireEvent.press(screen.getByLabelText("Pair"));
+
+    expect(mockRouter.push).toHaveBeenCalledWith({
+      pathname: "/(modals)/pair",
+      params: { host: "192.168.1.5", url: "192.168.1.5:9470" },
+    });
   });
 
   it("leads to the agent list when there is nothing connected", async () => {

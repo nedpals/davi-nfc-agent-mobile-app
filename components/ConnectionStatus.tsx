@@ -15,6 +15,7 @@ interface ConnectionStatusProps {
   onPress?: () => void;
   // Offered when the connection has given up and there is something to try.
   onRetry?: () => void;
+  retryLabel?: string;
 }
 
 const statusColor: Record<ConnectionStatusType, string> = {
@@ -36,6 +37,7 @@ export function ConnectionStatus({
   isOnline = true,
   onPress,
   onRetry,
+  retryLabel = "Try again",
 }: ConnectionStatusProps) {
   const color = statusColor[status] ?? statusColor.disconnected;
   const busy = status === "connecting" || status === "reconnecting" || !!isSearching;
@@ -103,10 +105,10 @@ export function ConnectionStatus({
         <TouchableOpacity
           onPress={onRetry}
           accessibilityRole="button"
-          accessibilityLabel="Try connecting again"
+          accessibilityLabel={retryLabel}
           hitSlop={12}
         >
-          <Text style={styles.retry}>Try again</Text>
+          <Text style={styles.retry}>{retryLabel}</Text>
         </TouchableOpacity>
       ) : onPress ? (
         <Text style={styles.chevron}>›</Text>
