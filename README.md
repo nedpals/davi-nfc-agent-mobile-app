@@ -40,8 +40,10 @@ twice.
 
 Every scan is kept locally — **the clock button in the header** shows the
 history, whether or not the agent was listening at the time. The fifty most
-recent are held for the session and the newest twenty survive a restart.
-Dismissing the tag in the drawer tells the agent it is gone.
+recent are held for the session and the newest twenty survive a restart. A row
+opens for the full record: when it was read, what its NDEF records hold, and a
+**Copy UID**, since a UID is what gets pasted into whatever the tag is being
+registered with. Dismissing the tag in the drawer tells the agent it is gone.
 
 ## Connecting to an agent
 
@@ -70,6 +72,11 @@ itself once the socket layer has spent its reconnect budget — except after
 **Disconnect**, which is taken as meaning it. An agent that refuses a
 connection is left alone for fifteen seconds rather than dialled in a loop, and
 more than one agent on the network is a choice the app leaves to you.
+
+**Settings → What this device offers** shows the capability declaration this
+device sends the agent — read, write, raw exchange, lock, and how long it can
+hold a tag — read from the same function that builds the declaration, so the
+screen cannot promise something the agent will not be told.
 
 **Pairing.** **Settings → Pairing** exchanges the six-digit PIN the agent shows
 on the kiosk for this device's own credential. The exchange runs over plain HTTP

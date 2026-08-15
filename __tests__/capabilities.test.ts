@@ -1,5 +1,6 @@
 import { Platform } from "react-native";
 import { IOS_TAG_HOLD_MS, getDeviceCapabilities } from "@/constants/config";
+import { describeCapabilities } from "@/utils/capabilities";
 
 const originalOS = Platform.OS;
 const setPlatform = (os: "ios" | "android") =>
@@ -58,5 +59,35 @@ describe("declared capabilities", () => {
 
     setPlatform("ios");
     expect(getDeviceCapabilities().supportedTagTypes).not.toContain("MIFARE Classic");
+  });
+});
+
+// What Settings shows has to be the same promise the agent is given, or the
+// screen becomes a second, drifting source of truth.
+describe("describeCapabilities", () => {
+  const rowFor = (label: string) => describeCapabilities().find((row) => row.label === label);
+
+  it("reports what Android offers", () => {
+    setPlatform("android");
+
+    expect(rowFor("Writes tags")).toMatchObject({ value: "Yes", offered: true });
+    expect(rowFor("Raw exchange")).toMatchObject({ value: "Yes" });
+    expect(rowFor("Tag hold")?.value).toBe("While it stays in the field");
+  });
+
+  it("reports what iOS withholds, and for how long it can hold a tag", () => {
+    setPlatform("ios");
+
+    expect(rowFor("Writes tags")).toMatchObject({ value: "No", offered: false });
+    expect(rowFor("Locks tags")).toMatchObject({ value: "No" });
+    expect(rowFor("Tag hold")?.value).toBe(`About ${Math.round(IOS_TAG_HOLD_MS / 1000)} seconds`);
+  });
+
+  it("lists the tag types the platform can actually reach", () => {
+    setPlatform("ios");
+    expect(rowFor("Tag types")?.value).not.toContain("MIFARE Classic");
+
+    setPlatform("android");
+    expect(rowFor("Tag types")?.value).toContain("MIFARE Classic");
   });
 });

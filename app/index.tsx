@@ -101,7 +101,9 @@ export default function ScannerScreen() {
             <Ionicons name="time-outline" size={20} color={colors.brand} />
             {scanHistory.length > 0 && (
               <View style={styles.badge}>
-                <Text style={styles.badgeText}>
+                {/* The badge is a fixed circle, so its digits cannot grow with
+                    the system font without spilling out of it. */}
+                <Text style={styles.badgeText} maxFontSizeMultiplier={1.2}>
                   {scanHistory.length > 99 ? "99+" : scanHistory.length}
                 </Text>
               </View>
@@ -164,6 +166,7 @@ export default function ScannerScreen() {
           processingEnabled={processingEnabled}
           disabled={readerState !== "ready"}
           disabledReason={READER_HINT[readerState]}
+          flashKey={lastTag ? `${lastTag.uid}-${lastTag.scannedAt.getTime()}` : undefined}
         />
       </View>
 

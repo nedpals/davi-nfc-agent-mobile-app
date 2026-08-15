@@ -1,4 +1,4 @@
-import { act, fireEvent, renderWithProviders as render, screen } from "@/test-utils/render";
+import { act, fireEvent, renderWithProviders as render, screen, waitFor } from "@/test-utils/render";
 import { ConnectionStatus } from "@/components/ConnectionStatus";
 import { Notice } from "@/components/Notice";
 import { ScanButton } from "@/components/ScanButton";
@@ -253,9 +253,29 @@ describe("TagDrawer during an agent operation", () => {
 });
 
 describe("TagCard", () => {
-  it("shows decoded NDEF content", () => {
+  it("keeps the list scannable by summarising records until asked", () => {
     render(
       <TagCard
+        tag={{
+          ...tag,
+          ndefMessage: {
+            records: [
+              { tnf: 1, type: "VA==", payload: "aGk=", recordType: "text", content: "Hello tag" },
+            ],
+          },
+        }}
+        onToggle={jest.fn()}
+      />
+    );
+
+    expect(screen.getByText("1 NDEF record")).toBeTruthy();
+    expect(screen.queryByText("Hello tag")).toBeNull();
+  });
+
+  it("shows decoded NDEF content once expanded", () => {
+    render(
+      <TagCard
+        expanded
         tag={{
           ...tag,
           ndefMessage: {
@@ -268,6 +288,25 @@ describe("TagCard", () => {
     );
 
     expect(screen.getByText("Hello tag")).toBeTruthy();
+  });
+
+  it("copies the UID, which is what gets pasted elsewhere", async () => {
+     
+    const Clipboard = require("expo-clipboard");
+    render(<TagCard expanded tag={tag} />);
+
+    fireEvent.press(screen.getByText("Copy UID"));
+
+    await waitFor(() => expect(Clipboard.setStringAsync).toHaveBeenCalledWith("04:A2:0B:00"));
+    await waitFor(() => expect(screen.getByText("Copied")).toBeTruthy());
+  });
+
+  it("expands and collapses on a tap", () => {
+    const onToggle = jest.fn();
+    render(<TagCard tag={tag} onToggle={onToggle} />);
+
+    fireEvent.press(screen.getByLabelText("Tag 04:A2:0B:00"));
+    expect(onToggle).toHaveBeenCalledTimes(1);
   });
 
   it("keeps what the agent did to the tag", () => {
@@ -289,7 +328,10 @@ describe("TagCard", () => {
 
   it("describes a record it could not decode instead of showing nothing", () => {
     render(
-      <TagCard tag={{ ...tag, ndefMessage: { records: [{ tnf: 2, type: "AQ==", payload: "AQI=" }] } }} />
+      <TagCard
+        expanded
+        tag={{ ...tag, ndefMessage: { records: [{ tnf: 2, type: "AQ==", payload: "AQI=" }] } }}
+      />
     );
 
     expect(screen.getByText(/TNF 2/)).toBeTruthy();

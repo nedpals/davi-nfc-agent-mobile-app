@@ -17,8 +17,14 @@ jest.mock("expo-secure-store", () => ({
   deleteItemAsync: jest.fn(() => Promise.resolve()),
 }));
 
+jest.mock("expo-clipboard", () => ({
+  setStringAsync: jest.fn(() => Promise.resolve(true)),
+  getStringAsync: jest.fn(() => Promise.resolve("")),
+}));
+
 jest.mock("expo-haptics", () => ({
   notificationAsync: jest.fn(() => Promise.resolve()),
+  selectionAsync: jest.fn(() => Promise.resolve()),
   NotificationFeedbackType: { Success: "success", Warning: "warning", Error: "error" },
 }));
 

@@ -217,6 +217,26 @@ describe("settings screen", () => {
     expect(screen.getByPlaceholderText("Shared API secret")).toBeTruthy();
   });
 
+  // "registered" is a wire value; showing it to someone reads as a machine
+  // talking to itself.
+  it("says the connection state in words", async () => {
+    render(<SettingsScreen />);
+    update(() => {
+      useAppStore.getState().setConnectionStatus("reconnecting");
+    });
+
+    await waitFor(() => expect(screen.getByText("Reconnecting…")).toBeTruthy());
+    expect(screen.queryByText("reconnecting")).toBeNull();
+  });
+
+  it("shows what this device offers the agent", async () => {
+    render(<SettingsScreen />);
+
+    await waitFor(() => expect(screen.getByText("What this device offers")).toBeTruthy());
+    expect(screen.getByText("Writes tags")).toBeTruthy();
+    expect(screen.getByText("Tag hold")).toBeTruthy();
+  });
+
   it("describes the credential the keychain is holding", async () => {
     (SecureStore.getItemAsync as jest.Mock).mockResolvedValue(
       JSON.stringify({

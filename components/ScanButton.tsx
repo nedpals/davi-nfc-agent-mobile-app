@@ -9,6 +9,9 @@ interface ScanButtonProps {
   disabled?: boolean;
   // Why the button is unavailable, when the caller knows better than "no NFC".
   disabledReason?: string;
+  // Changes once per scan. The drawer slides up at the bottom of the screen
+  // while the eye is on the ring, so the read is confirmed here too.
+  flashKey?: string | number;
 }
 
 const SIZE = 220;
@@ -41,10 +44,27 @@ export function ScanButton({
   processingEnabled,
   disabled,
   disabledReason,
+  flashKey,
 }: ScanButtonProps) {
   const pulse = useRef(new Animated.Value(0)).current;
   const spin = useRef(new Animated.Value(0)).current;
+  const flash = useRef(new Animated.Value(0)).current;
+  const lastFlash = useRef(flashKey);
   const isScanning = processingEnabled && !disabled;
+
+  useEffect(() => {
+    // Only a new scan flashes; the first render is not one.
+    if (flashKey === undefined || flashKey === lastFlash.current) {
+      return;
+    }
+    lastFlash.current = flashKey;
+
+    flash.setValue(0);
+    Animated.sequence([
+      Animated.timing(flash, { toValue: 1, duration: 120, useNativeDriver: true }),
+      Animated.timing(flash, { toValue: 0, duration: 420, useNativeDriver: true }),
+    ]).start();
+  }, [flashKey, flash]);
 
   useEffect(() => {
     if (!isScanning) {
@@ -116,6 +136,18 @@ export function ScanButton({
       style={styles.touchable}
     >
       <Animated.View style={[styles.ring, { transform: [{ scale }] }]}>
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.halo,
+            {
+              opacity: flash.interpolate({ inputRange: [0, 1], outputRange: [0, 0.5] }),
+              transform: [
+                { scale: flash.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1.12] }) },
+              ],
+            },
+          ]}
+        />
         <Animated.View style={[styles.arc, { transform: [{ rotate }] }]}>
           <Svg width={SIZE} height={SIZE}>
             <Circle
@@ -142,7 +174,11 @@ export function ScanButton({
         </Animated.View>
 
         <View style={[styles.core, disabled && styles.coreDisabled]}>
-          <Text style={[styles.wordmark, { color: accent }]}>NFC</Text>
+          {/* Part of the mark rather than a label: past a point it stops
+              fitting the ring it sits in. */}
+          <Text style={[styles.wordmark, { color: accent }]} maxFontSizeMultiplier={1.3}>
+            NFC
+          </Text>
           <NFCWaves color={accent} />
         </View>
       </Animated.View>
@@ -167,6 +203,12 @@ const styles = StyleSheet.create({
   },
   arc: {
     ...StyleSheet.absoluteFillObject,
+  },
+  halo: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: SIZE / 2,
+    borderWidth: 10,
+    borderColor: colors.accent,
   },
   core: {
     width: 158,
