@@ -46,7 +46,7 @@ export default function SettingsScreen() {
     isBusy,
   } = useConnection();
 
-  const { pairing, isPaired, pinningState, isPairing, pair, unpair } = usePairing();
+  const { pairing, isPaired, pinningState, unpair } = usePairing();
 
   const setDeviceName = useAppStore((state) => state.setDeviceName);
   const setApiSecret = useAppStore((state) => state.setApiSecret);
@@ -56,7 +56,6 @@ export default function SettingsScreen() {
   const [urlInput, setUrlInput] = useState(serverUrl ?? "");
   const [nameInput, setNameInput] = useState(deviceName);
   const [secretInput, setSecretInput] = useState(apiSecret ?? "");
-  const [pinInput, setPinInput] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
   const [nameSaved, setNameSaved] = useState(false);
   const urlEdited = useRef(false);
@@ -113,29 +112,17 @@ export default function SettingsScreen() {
     }
   };
 
-  const handlePair = async () => {
+  // Pairing itself lives on its own screen, reached from here and from tapping
+  // an agent to connect to. The address field is what this screen knows about
+  // the agent, so it is what gets handed over.
+  const handlePair = () => {
     const host = hostFromAgentUrl(urlInput);
     if (!host) {
       Alert.alert("Address required", "Pairing needs to know which agent to ask.");
       return;
     }
-    if (!pinInput.trim()) {
-      Alert.alert("PIN required", "The agent shows a six-digit PIN in its tray menu and logs.");
-      return;
-    }
 
-    try {
-      const credential = await pair(host, pinInput.trim(), nameInput.trim() || deviceName);
-      setPinInput("");
-      Alert.alert(
-        "Paired",
-        credential.publicKeyPin
-          ? "This device has its own credential and knows the agent's key."
-          : "This device has its own credential. The agent is serving without TLS."
-      );
-    } catch (error) {
-      Alert.alert("Pairing failed", error instanceof Error ? error.message : String(error));
-    }
+    router.push({ pathname: "/(modals)/pair", params: { host, url: urlInput.trim() } });
   };
 
   const handleUnpair = () => {
@@ -291,23 +278,9 @@ export default function SettingsScreen() {
           ) : (
             <Section
               title="Pairing"
-              footer="The agent shows the PIN in its tray menu, its logs and its pairing page. Five wrong attempts lock pairing until it restarts."
+              footer="Pairing hands this device its own credential and the key to recognize the agent by, which is what lets it connect over the agent's own certificate."
             >
-              <TextInput
-                style={styles.input}
-                value={pinInput}
-                onChangeText={setPinInput}
-                placeholder="Six-digit PIN"
-                placeholderTextColor={colors.textFaint}
-                keyboardType="number-pad"
-                maxLength={6}
-              />
-              <Button
-                label={isPairing ? "Pairing…" : "Pair with agent"}
-                onPress={handlePair}
-                loading={isPairing}
-                style={styles.stacked}
-              />
+              <Button label="Pair with agent" onPress={handlePair} />
             </Section>
           )}
 

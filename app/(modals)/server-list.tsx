@@ -18,17 +18,20 @@ import { Button } from "@/components/Button";
 import { EmptyState } from "@/components/EmptyState";
 import { ModalHeader } from "@/components/ModalHeader";
 import { colors, fontFamily, radius, shadows, spacing, typography } from "@/constants/theme";
-import { useConnection, useServerDiscovery } from "@/hooks";
-import { preferredAddress } from "@/services/discovery";
+import { hostFromAgentUrl } from "@/services/agent-url";
+import { useConnection, usePairing, useServerDiscovery } from "@/hooks";
+import { discoveryService, preferredAddress } from "@/services/discovery";
 import type { DiscoveredServer } from "@/types/protocol";
 
 function ServerItem({
   server,
   busy,
+  paired,
   onPress,
 }: {
   server: DiscoveredServer;
   busy: boolean;
+  paired: boolean;
   onPress: () => void;
 }) {
   const { version, tls } = server.txtRecords ?? {};
@@ -39,7 +42,7 @@ function ServerItem({
       onPress={onPress}
       disabled={busy}
       accessibilityRole="button"
-      accessibilityLabel={`Connect to ${server.name}`}
+      accessibilityLabel={paired ? `Connect to ${server.name}` : `Pair with ${server.name}`}
     >
       <View style={styles.itemText}>
         <Text style={styles.itemName} numberOfLines={1}>
@@ -51,6 +54,7 @@ function ServerItem({
         <View style={styles.tags}>
           {version ? <Text style={styles.tag}>v{version}</Text> : null}
           <Text style={styles.tag}>{tls === "false" ? "No TLS" : "TLS"}</Text>
+          {paired ? <Text style={[styles.tag, styles.tagPaired]}>Paired</Text> : null}
         </View>
       </View>
 
@@ -67,6 +71,7 @@ export default function ServerListScreen() {
   const router = useRouter();
   const { servers, isSearching, refresh } = useServerDiscovery({ autoStart: true });
   const { connect, connectToServer } = useConnection();
+  const { pairing } = usePairing();
   const [connectingTo, setConnectingTo] = useState<string | null>(null);
   const [address, setAddress] = useState("");
   const [isDialling, setIsDialling] = useState(false);
@@ -83,7 +88,25 @@ export default function ServerListScreen() {
     }
   };
 
+  // Pairing is how a device learns the agent's key and gets a credential, so
+  // an agent this one has not paired with is a pairing step, not a doomed
+  // connection followed by a hunt through Settings for the PIN field.
   const handleSelect = async (server: DiscoveredServer) => {
+    const host = preferredAddress(server);
+
+    if (pairing?.host !== host) {
+      router.push({
+        pathname: "/(modals)/pair",
+        params: {
+          host,
+          port: String(server.port || ""),
+          name: server.name,
+          url: discoveryService.buildWebSocketUrl(server),
+        },
+      });
+      return;
+    }
+
     setConnectingTo(server.name);
     try {
       await dial(() => connectToServer(server));
@@ -99,6 +122,12 @@ export default function ServerListScreen() {
     const target = address.trim();
     if (!target) {
       Alert.alert("Address required", "Enter the agent's address, such as 192.168.1.100:9470.");
+      return;
+    }
+
+    const host = hostFromAgentUrl(target);
+    if (pairing?.host !== host) {
+      router.push({ pathname: "/(modals)/pair", params: { host, url: target } });
       return;
     }
 
@@ -133,6 +162,7 @@ export default function ServerListScreen() {
           <ServerItem
             server={item}
             busy={connectingTo === item.name}
+            paired={pairing?.host === preferredAddress(item)}
             onPress={() => handleSelect(item)}
           />
         )}
@@ -248,6 +278,10 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: radius.sm,
     overflow: "hidden",
+  },
+  tagPaired: {
+    color: colors.accentDeep,
+    backgroundColor: colors.accentSoft,
   },
   manual: {
     paddingHorizontal: spacing.lg,
