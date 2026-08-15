@@ -1,3 +1,4 @@
+import * as Haptics from "expo-haptics";
 import { Platform } from "react-native";
 import NfcManager, { Ndef, NfcEvents } from "react-native-nfc-manager";
 import { useAppStore } from "@/stores";
@@ -467,5 +468,146 @@ describe("transceiving with tags", () => {
 
     expect(result.errorCode).toBe("NOT_SUPPORTED");
     expect(manager.isoDepHandler.transceive).not.toHaveBeenCalled();
+  });
+});
+
+describe("publishing agent-driven operations", () => {
+  const ndefBytes = () => Buffer.from([0xd1, 0x01, 0x01, 0x54, 0x02]).toString("base64");
+
+  const originalOS = Platform.OS;
+  const setPlatform = (os: "ios" | "android") =>
+    Object.defineProperty(Platform, "OS", { value: os, configurable: true });
+
+  beforeEach(() => setPlatform("android"));
+  afterAll(() => setPlatform(originalOS as "ios" | "android"));
+
+  async function presentTag(id: number[]): Promise<string> {
+    await discoverTag()(rawTag(id));
+    const uid = useAppStore.getState().nfc.lastTag?.uid;
+    if (!uid) {
+      throw new Error("The scan did not register a tag");
+    }
+    return uid;
+  }
+
+  it("publishes the write while it is in flight, before its outcome is known", async () => {
+    const uid = await presentTag([0x04, 0xc1]);
+
+    // Hold the write open so the running state can be observed.
+    let finishWrite: (() => void) | undefined;
+    (manager.ndefHandler.writeNdefMessage as jest.Mock).mockImplementationOnce(
+      () => new Promise<void>((resolve) => { finishWrite = resolve; })
+    );
+
+    const pending = nfcService.handleWriteRequest("req_op_1", {
+      requestID: "req_op_1",
+      deviceID: "dev",
+      tagUID: uid,
+      ndefBytes: ndefBytes(),
+    });
+
+    await sleep(0);
+    expect(useAppStore.getState().nfc.operation).toMatchObject({
+      kind: "write",
+      tagUID: uid,
+      status: "running",
+    });
+
+    finishWrite!();
+    await pending;
+
+    expect(useAppStore.getState().nfc.operation).toMatchObject({ status: "succeeded" });
+  });
+
+  it("publishes a failure with the code the agent was given", async () => {
+    const uid = await presentTag([0x04, 0xc2]);
+    (manager.ndefHandler.writeNdefMessage as jest.Mock).mockRejectedValueOnce(
+      new Error("Tag is read-only")
+    );
+
+    const result = await nfcService.handleWriteRequest("req_op_2", {
+      requestID: "req_op_2",
+      deviceID: "dev",
+      tagUID: uid,
+      ndefBytes: ndefBytes(),
+    });
+
+    expect(result.success).toBe(false);
+    expect(useAppStore.getState().nfc.operation).toMatchObject({
+      status: "failed",
+      errorCode: result.errorCode,
+    });
+  });
+
+  it("publishes a request that arrived with no tag present, which is the cue to present one", async () => {
+    const result = await nfcService.handleWriteRequest("req_op_3", {
+      requestID: "req_op_3",
+      deviceID: "dev",
+      ndefBytes: ndefBytes(),
+    });
+
+    expect(result.success).toBe(false);
+    expect(useAppStore.getState().nfc.operation).toMatchObject({
+      tagUID: null,
+      status: "failed",
+      errorCode: "TAG_NOT_CONNECTED",
+    });
+  });
+
+  it("keeps the outcome against the scan it applied to", async () => {
+    const uid = await presentTag([0x04, 0xc4]);
+
+    await nfcService.handleWriteRequest("req_op_4", {
+      requestID: "req_op_4",
+      deviceID: "dev",
+      tagUID: uid,
+      ndefBytes: ndefBytes(),
+    });
+
+    expect(useAppStore.getState().nfc.scanHistory[0].operations).toEqual([
+      { kind: "write", succeeded: true, at: expect.any(Date) },
+    ]);
+  });
+
+  it("publishes a transceive the same way", async () => {
+    const uid = await presentTag([0x04, 0xc5]);
+
+    await nfcService.handleTransceiveRequest("req_op_5", {
+      requestID: "req_op_5",
+      deviceID: "dev",
+      tagUID: uid,
+      data: Buffer.from([0x00, 0xa4]).toString("base64"),
+    });
+
+    expect(useAppStore.getState().nfc.operation).toMatchObject({
+      kind: "transceive",
+      status: "succeeded",
+    });
+  });
+
+  it("is felt as well as shown, since the phone is against the tag and out of sight", async () => {
+    const uid = await presentTag([0x04, 0xc6]);
+    (Haptics.notificationAsync as jest.Mock).mockClear();
+
+    await nfcService.handleWriteRequest("req_op_6", {
+      requestID: "req_op_6",
+      deviceID: "dev",
+      tagUID: uid,
+      ndefBytes: ndefBytes(),
+    });
+    expect(Haptics.notificationAsync).toHaveBeenLastCalledWith(
+      Haptics.NotificationFeedbackType.Success
+    );
+
+    (manager.ndefHandler.writeNdefMessage as jest.Mock).mockRejectedValueOnce(new Error("nope"));
+    await nfcService.handleWriteRequest("req_op_7", {
+      requestID: "req_op_7",
+      deviceID: "dev",
+      tagUID: uid,
+      ndefBytes: ndefBytes(),
+    });
+    expect(Haptics.notificationAsync).toHaveBeenLastCalledWith(
+      Haptics.NotificationFeedbackType.Error
+    );
   });
 });

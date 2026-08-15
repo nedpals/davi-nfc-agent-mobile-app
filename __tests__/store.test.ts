@@ -114,6 +114,72 @@ describe("scan history", () => {
   });
 });
 
+describe("agent-driven operations", () => {
+  it("publishes an operation while it runs", () => {
+    const store = useAppStore.getState();
+    store.startTagOperation({ kind: "write", tagUID: "AA:BB" });
+
+    expect(useAppStore.getState().nfc.operation).toMatchObject({
+      kind: "write",
+      tagUID: "AA:BB",
+      status: "running",
+    });
+  });
+
+  it("keeps the outcome on the scan the operation applied to", () => {
+    const store = useAppStore.getState();
+    store.addScannedTag(tag("AA:BB"));
+    store.startTagOperation({ kind: "write", tagUID: "AA:BB" });
+    store.finishTagOperation({ status: "succeeded" });
+
+    const { operation, scanHistory, lastTag } = useAppStore.getState().nfc;
+    expect(operation).toMatchObject({ status: "succeeded" });
+    expect(operation?.finishedAt).toBeInstanceOf(Date);
+    expect(scanHistory[0].operations).toEqual([
+      { kind: "write", succeeded: true, at: expect.any(Date) },
+    ]);
+    // The drawer reads the live tag, so it has to carry the outcome too.
+    expect(lastTag?.operations).toHaveLength(1);
+  });
+
+  it("records a failure against the tag with the agent's reason", () => {
+    const store = useAppStore.getState();
+    store.addScannedTag(tag("AA:BB"));
+    store.startTagOperation({ kind: "write", tagUID: "AA:BB" });
+    store.finishTagOperation({ status: "failed", error: "The tag is read-only", errorCode: "READ_ONLY" });
+
+    const { operation, scanHistory } = useAppStore.getState().nfc;
+    expect(operation).toMatchObject({ errorCode: "READ_ONLY", error: "The tag is read-only" });
+    expect(scanHistory[0].operations).toEqual([
+      { kind: "write", succeeded: false, at: expect.any(Date) },
+    ]);
+  });
+
+  it("holds an operation the agent asked for when no tag was present", () => {
+    const store = useAppStore.getState();
+    store.startTagOperation({ kind: "write", tagUID: null });
+    store.finishTagOperation({ status: "failed", errorCode: "TAG_NOT_CONNECTED" });
+
+    expect(useAppStore.getState().nfc.operation).toMatchObject({
+      tagUID: null,
+      status: "failed",
+    });
+  });
+
+  it("ignores an outcome for an operation that was never started", () => {
+    useAppStore.getState().finishTagOperation({ status: "succeeded" });
+    expect(useAppStore.getState().nfc.operation).toBeNull();
+  });
+
+  it("clears the operation once it has been shown", () => {
+    const store = useAppStore.getState();
+    store.startTagOperation({ kind: "write", tagUID: "AA:BB" });
+    store.clearTagOperation();
+
+    expect(useAppStore.getState().nfc.operation).toBeNull();
+  });
+});
+
 describe("discovery", () => {
   const server = (name: string) => ({
     name,
@@ -201,6 +267,37 @@ describe("mergePersisted", () => {
       technology: "Unknown",
       sentToServer: false,
     });
+  });
+
+  it("revives the operations kept against a scan", () => {
+    const merged = mergePersisted(
+      {
+        nfc: {
+          scanHistory: [
+            {
+              uid: "AA:BB",
+              scannedAt: "2026-01-01T12:00:00.000Z",
+              operations: [
+                { kind: "write", succeeded: true, at: "2026-01-01T12:00:05.000Z" },
+                { kind: "transceive", succeeded: false, at: "not a date" },
+                { kind: "nonsense", succeeded: true, at: "2026-01-01T12:00:06.000Z" },
+              ],
+            },
+          ],
+        },
+      },
+      current()
+    );
+
+    const operations = merged.nfc.scanHistory[0].operations;
+    expect(operations).toHaveLength(1);
+    expect(operations![0]).toMatchObject({ kind: "write", succeeded: true });
+    expect(operations![0].at).toBeInstanceOf(Date);
+  });
+
+  it("does not restore an operation that was running when the app closed", () => {
+    const merged = mergePersisted({ nfc: { scanHistory: [] } }, current());
+    expect(merged.nfc.operation).toBeNull();
   });
 
   it("starts a session disconnected, unregistered and searching nothing", () => {

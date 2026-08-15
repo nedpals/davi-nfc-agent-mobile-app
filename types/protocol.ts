@@ -372,6 +372,33 @@ export interface DiscoveredServer {
 }
 
 // Scanned tag for local state
+// Work the agent asked this device to do on a tag, as opposed to a tag the
+// device merely reported.
+export type TagOperationKind = "write" | "transceive";
+
+export interface TagOperationRecord {
+  kind: TagOperationKind;
+  succeeded: boolean;
+  at: Date;
+}
+
+/**
+ * An operation in progress or just finished.
+ *
+ * `tagUID` can be absent: the agent may ask for a write when nothing is
+ * present, and that refusal is worth showing — it is the app's cue to ask for
+ * a tag.
+ */
+export interface TagOperation {
+  kind: TagOperationKind;
+  tagUID: string | null;
+  status: "running" | "succeeded" | "failed";
+  error?: string;
+  errorCode?: DeviceErrorCode;
+  startedAt: Date;
+  finishedAt?: Date;
+}
+
 export interface ScannedTag {
   uid: string;
   technology: string;
@@ -379,4 +406,6 @@ export interface ScannedTag {
   scannedAt: Date;
   ndefMessage?: NDEFMessage;
   sentToServer: boolean;
+  // What the agent did to this tag while it was in the field.
+  operations?: TagOperationRecord[];
 }

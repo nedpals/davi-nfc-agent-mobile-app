@@ -1,8 +1,14 @@
 import { StyleSheet, Text, View } from "react-native";
+import { Chip } from "./Chip";
 import { TagStatusBadge } from "./TagStatusBadge";
 import { colors, fontFamily, radius, shadows, spacing, typography } from "@/constants/theme";
 import { base64ByteLength, formatTimeAgo } from "@/utils/format";
-import type { NDEFRecord, ScannedTag } from "@/types/protocol";
+import type { NDEFRecord, ScannedTag, TagOperationRecord } from "@/types/protocol";
+
+function describeOperationRecord(entry: TagOperationRecord): string {
+  const verb = entry.kind === "write" ? "Written" : "Exchange";
+  return entry.succeeded ? verb : `${verb} failed`;
+}
 
 function describeRecord(record: NDEFRecord): string {
   const kind = record.recordType ?? `TNF ${record.tnf}`;
@@ -26,6 +32,18 @@ export function TagCard({ tag }: TagCardProps) {
         </Text>
         <TagStatusBadge sent={tag.sentToServer} />
       </View>
+
+      {tag.operations?.length ? (
+        <View style={styles.operations}>
+          {tag.operations.map((entry, index) => (
+            <Chip
+              key={index}
+              label={describeOperationRecord(entry)}
+              tone={entry.succeeded ? "success" : "danger"}
+            />
+          ))}
+        </View>
+      ) : null}
 
       <View style={styles.meta}>
         <Text style={styles.metaText}>{tag.type}</Text>
@@ -73,6 +91,12 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: colors.brand,
     fontFamily: fontFamily.mono,
+  },
+  operations: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.xs,
+    marginTop: spacing.sm,
   },
   meta: {
     flexDirection: "row",

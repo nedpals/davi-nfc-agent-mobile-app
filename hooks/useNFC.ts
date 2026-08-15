@@ -5,6 +5,7 @@ import { nfcService } from "@/services/nfc";
 export function useNFC() {
   const nfc = useAppStore((state) => state.nfc);
   const clearHistory = useAppStore((state) => state.clearScanHistory);
+  const clearOperation = useAppStore((state) => state.clearTagOperation);
   const [isInitialized, setIsInitialized] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
 
@@ -57,6 +58,7 @@ export function useNFC() {
 
     lastTag: nfc.lastTag,
     scanHistory: nfc.scanHistory,
+    operation: nfc.operation,
 
     toggleProcessing,
     enableProcessing,
@@ -64,6 +66,7 @@ export function useNFC() {
     checkEnabled,
     clearLastTag,
     clearHistory,
+    clearOperation,
     openSystemSettings,
     canOpenSystemSettings: nfcService.canOpenSystemSettings(),
   };

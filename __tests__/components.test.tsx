@@ -1,10 +1,19 @@
-import { fireEvent, renderWithProviders as render, screen } from "@/test-utils/render";
+import { act, fireEvent, renderWithProviders as render, screen } from "@/test-utils/render";
 import { ConnectionStatus } from "@/components/ConnectionStatus";
 import { Notice } from "@/components/Notice";
 import { ScanButton } from "@/components/ScanButton";
 import { TagCard } from "@/components/TagCard";
 import { TagDrawer } from "@/components/TagDrawer";
-import type { ScannedTag } from "@/types/protocol";
+import { OPERATION_SUCCESS_LINGER } from "@/utils/operations";
+import type { ScannedTag, TagOperation } from "@/types/protocol";
+
+const operation = (overrides: Partial<TagOperation> = {}): TagOperation => ({
+  kind: "write",
+  tagUID: "04:A2:0B:00",
+  status: "running",
+  startedAt: new Date(),
+  ...overrides,
+});
 
 const tag: ScannedTag = {
   uid: "04:A2:0B:00",
@@ -125,6 +134,124 @@ describe("TagDrawer", () => {
   });
 });
 
+describe("TagDrawer during an agent operation", () => {
+  it("asks the person to hold the tag still while the agent writes", () => {
+    render(<TagDrawer tag={tag} operation={operation()} onClear={jest.fn()} />);
+
+    expect(screen.getByText("Writing to the tag — hold it still")).toBeTruthy();
+  });
+
+  // Dismissing would withdraw the tag the write is targeting, since the service
+  // reads the current tag straight off the last scan.
+  it("refuses to be dismissed while an operation is running", () => {
+    const onClear = jest.fn();
+    render(<TagDrawer tag={tag} operation={operation()} onClear={onClear} />);
+
+    fireEvent.press(screen.getByLabelText("Dismiss tag"));
+    expect(onClear).not.toHaveBeenCalled();
+  });
+
+  it("can be dismissed again once the operation is over", () => {
+    const onClear = jest.fn();
+    render(
+      <TagDrawer
+        tag={tag}
+        operation={operation({ status: "succeeded" })}
+        onClear={onClear}
+        onOperationDone={jest.fn()}
+      />
+    );
+
+    fireEvent.press(screen.getByLabelText("Dismiss tag"));
+    expect(onClear).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a written tag", () => {
+    render(
+      <TagDrawer
+        tag={tag}
+        operation={operation({ status: "succeeded" })}
+        onClear={jest.fn()}
+        onOperationDone={jest.fn()}
+      />
+    );
+
+    expect(screen.getByText("The agent wrote this tag")).toBeTruthy();
+    expect(screen.getByText("Written")).toBeTruthy();
+  });
+
+  it("asks for the tag again when it was taken away", () => {
+    render(
+      <TagDrawer
+        tag={tag}
+        operation={operation({ status: "failed", errorCode: "TAG_REMOVED" })}
+        onClear={jest.fn()}
+        onOperationDone={jest.fn()}
+      />
+    );
+
+    expect(screen.getByText("Present the tag again to finish")).toBeTruthy();
+  });
+
+  // The agent can ask for a write when nothing is on the reader, and that
+  // request is the only reason the person would know to present one.
+  it("shows a request that arrived with no tag present", () => {
+    render(
+      <TagDrawer
+        tag={null}
+        operation={operation({ tagUID: null, status: "failed", errorCode: "TAG_NOT_CONNECTED" })}
+        onClear={jest.fn()}
+        onOperationDone={jest.fn()}
+      />
+    );
+
+    expect(screen.getByText("No tag present")).toBeTruthy();
+    expect(screen.getByText("Present the tag again to finish")).toBeTruthy();
+  });
+
+  it("gets out of the way once the outcome has been read", () => {
+    jest.useFakeTimers();
+    const onOperationDone = jest.fn();
+
+    try {
+      render(
+        <TagDrawer
+          tag={tag}
+          operation={operation({ status: "succeeded" })}
+          onClear={jest.fn()}
+          onOperationDone={onOperationDone}
+        />
+      );
+
+      expect(onOperationDone).not.toHaveBeenCalled();
+      act(() => {
+        jest.advanceTimersByTime(OPERATION_SUCCESS_LINGER + 10);
+      });
+      expect(onOperationDone).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("stays put while the operation is still running", () => {
+    jest.useFakeTimers();
+    const onOperationDone = jest.fn();
+
+    try {
+      render(
+        <TagDrawer tag={tag} operation={operation()} onClear={jest.fn()} onOperationDone={onOperationDone} />
+      );
+
+      act(() => {
+        jest.advanceTimersByTime(60_000);
+      });
+      expect(onOperationDone).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});
+
 describe("TagCard", () => {
   it("shows decoded NDEF content", () => {
     render(
@@ -141,6 +268,23 @@ describe("TagCard", () => {
     );
 
     expect(screen.getByText("Hello tag")).toBeTruthy();
+  });
+
+  it("keeps what the agent did to the tag", () => {
+    render(
+      <TagCard
+        tag={{
+          ...tag,
+          operations: [
+            { kind: "write", succeeded: true, at: new Date() },
+            { kind: "transceive", succeeded: false, at: new Date() },
+          ],
+        }}
+      />
+    );
+
+    expect(screen.getByText("Written")).toBeTruthy();
+    expect(screen.getByText("Exchange failed")).toBeTruthy();
   });
 
   it("describes a record it could not decode instead of showing nothing", () => {

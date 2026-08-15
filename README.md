@@ -165,6 +165,21 @@ to raise a system sheet and wait for someone to present the tag again. Against a
 20-second deadline that is a race, and the agent routes around a device that
 says it cannot write rather than timing out on one that says it can.
 
+**The person holding the phone is part of the operation.** A write only lands
+while the tag stays in the field, so it is published to the store before it
+starts rather than reported only to the agent afterwards: the tag drawer says
+*"Writing to the tag — hold it still"* while it runs, then reports what
+happened, and vibrates either way because the phone is against a tag and out of
+sight at the time. What the agent did is kept on the scan, so the history shows
+which tags were written.
+
+Two consequences are worth knowing. Dismissing the drawer **withdraws the tag**
+— `currentTagUid` is the last scan, so clearing it makes the next write fail
+with `TAG_NOT_CONNECTED` — which is why the drawer cannot be dismissed or swiped
+away while an operation is running. And a write that arrives when nothing is
+present is shown rather than silently refused: that refusal is the only thing
+that would tell someone a tag is wanted, so it asks for one.
+
 ## How long a tag stays available
 
 The agent already delimits a hold with `tagScanned` and `tagRemoved`; what it

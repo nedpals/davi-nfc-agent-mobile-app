@@ -1,6 +1,5 @@
 import { TAG_DEDUPE_WINDOW } from "@/constants/config";
 import { useAppStore } from "@/stores";
-import type { ScannedTag } from "@/types/protocol";
 import * as Haptics from "expo-haptics";
 import { AppState, type AppStateStatus, Platform } from "react-native";
 import NfcManager, { Ndef, NfcAdapter, NfcEvents, NfcTech } from "react-native-nfc-manager";
@@ -14,6 +13,8 @@ import {
 import { websocketService } from "./websocket";
 import type {
   DeviceErrorCode,
+  ScannedTag,
+  TagOperationKind,
   DeviceTransceiveRequestPayload,
   DeviceTransceiveResponsePayload,
   DeviceWriteRequestPayload,
@@ -369,6 +370,16 @@ class NFCService {
     return previous?.uid === tag.uid && now - previous.at < TAG_DEDUPE_WINDOW;
   }
 
+  private notifyOperation(succeeded: boolean): void {
+    // A write finishes while the phone is against the tag and out of sight, so
+    // the outcome has to be felt as well as shown.
+    Haptics.notificationAsync(
+      succeeded ? Haptics.NotificationFeedbackType.Success : Haptics.NotificationFeedbackType.Error
+    ).catch(() => {
+      // Haptics are a nicety; a device without them still works.
+    });
+  }
+
   private notifyScan(): void {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {
       // Haptics are a nicety; a device without them still scans.
@@ -544,10 +555,57 @@ class NFCService {
   }
 
   /**
+   * Publish an agent-driven operation while it runs, so the screen can ask the
+   * person to hold the tag still and then tell them how it went.
+   *
+   * A refusal is published too. "The agent wanted to write and nothing was
+   * present" is the app's cue to ask for a tag, and it is invisible otherwise.
+   */
+  private async runOperation<T extends { success: boolean; error?: string; errorCode?: DeviceErrorCode }>(
+    kind: TagOperationKind,
+    requestedTagUID: string | undefined,
+    perform: () => Promise<T>,
+  ): Promise<T> {
+    const store = useAppStore.getState();
+    store.startTagOperation({ kind, tagUID: requestedTagUID ?? this.currentTagUid() });
+
+    let result: T;
+    try {
+      result = await perform();
+    } catch (error) {
+      store.finishTagOperation({ status: "failed", error: describeNfcError(error) });
+      this.notifyOperation(false);
+      throw error;
+    }
+
+    store.finishTagOperation(
+      result.success
+        ? { status: "succeeded" }
+        : { status: "failed", error: result.error, errorCode: result.errorCode }
+    );
+    this.notifyOperation(result.success);
+
+    return result;
+  }
+
+  /**
    * Carry out a write the agent asked for, and describe the outcome in its
    * terms. Refusals are outcomes too — the agent is waiting on this.
+   *
+   * The person holding the phone is part of this: the tag has to stay in the
+   * field for the write to land, so the operation is published to the store
+   * before it starts rather than only reported to the agent afterwards.
    */
   async handleWriteRequest(
+    requestID: string,
+    payload: DeviceWriteRequestPayload,
+  ): Promise<DeviceWriteResponsePayload> {
+    return this.runOperation("write", payload.tagUID, () =>
+      this.performWrite(requestID, payload)
+    );
+  }
+
+  private async performWrite(
     requestID: string,
     payload: DeviceWriteRequestPayload,
   ): Promise<DeviceWriteResponsePayload> {
@@ -598,6 +656,15 @@ class NFCService {
    * safe. Repeating is its decision to make.
    */
   async handleTransceiveRequest(
+    requestID: string,
+    payload: DeviceTransceiveRequestPayload,
+  ): Promise<DeviceTransceiveResponsePayload> {
+    return this.runOperation("transceive", payload.tagUID, () =>
+      this.performTransceive(requestID, payload)
+    );
+  }
+
+  private async performTransceive(
     requestID: string,
     payload: DeviceTransceiveRequestPayload,
   ): Promise<DeviceTransceiveResponsePayload> {

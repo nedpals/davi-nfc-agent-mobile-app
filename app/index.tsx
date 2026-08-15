@@ -49,8 +49,10 @@ export default function ScannerScreen() {
     processingEnabled,
     lastTag,
     scanHistory,
+    operation,
     toggleProcessing,
     clearLastTag,
+    clearOperation,
     initError,
     openSystemSettings,
     canOpenSystemSettings,
@@ -164,7 +166,9 @@ export default function ScannerScreen() {
 
       <TagDrawer
         tag={lastTag}
+        operation={operation}
         onClear={clearLastTag}
+        onOperationDone={clearOperation}
         onPress={() => router.push("/(modals)/history")}
       />
     </SafeAreaView>

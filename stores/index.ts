@@ -9,6 +9,8 @@ import type {
   PairingSummary,
   ScannedTag,
   ServerInfo,
+  TagOperation,
+  TagOperationRecord,
 } from "@/types/protocol";
 import { APP_VERSION, HISTORY_LIMIT, PERSISTED_HISTORY_LIMIT, getDeviceName } from "@/constants/config";
 
@@ -56,6 +58,10 @@ interface NFCState {
   processingEnabled: boolean;
   lastTag: ScannedTag | null;
   scanHistory: ScannedTag[];
+  // Work the agent is doing, or has just done, on the tag in the field. The
+  // person holding the phone is part of that operation, so it is state the UI
+  // has to be able to see.
+  operation: TagOperation | null;
 }
 
 interface DiscoveryState {
@@ -93,6 +99,9 @@ interface AppStore {
   addScannedTag: (tag: ScannedTag) => void;
   markTagSent: (uid: string) => void;
   clearScanHistory: () => void;
+  startTagOperation: (operation: Pick<TagOperation, "kind" | "tagUID">) => void;
+  finishTagOperation: (outcome: Omit<TagOperation, "kind" | "tagUID" | "startedAt">) => void;
+  clearTagOperation: () => void;
 
   discovery: DiscoveryState;
   setSearching: (searching: boolean) => void;
@@ -137,6 +146,7 @@ const initialNFCState: NFCState = {
   processingEnabled: true,
   lastTag: null,
   scanHistory: [],
+  operation: null,
 };
 
 const initialDiscoveryState: DiscoveryState = {
@@ -221,6 +231,56 @@ export const useAppStore = create<AppStore>()(
             };
           }),
         clearScanHistory: () => patchNFC({ scanHistory: [], lastTag: null }),
+        startTagOperation: ({ kind, tagUID }) =>
+          patchNFC({
+            operation: { kind, tagUID, status: "running", startedAt: new Date() },
+          }),
+        // The outcome lands in two places: the live operation, which the UI
+        // shows for a moment, and the scan itself, which keeps it.
+        finishTagOperation: (outcome) =>
+          set((state) => {
+            const running = state.nfc.operation;
+            if (!running) {
+              return {};
+            }
+
+            const finished: TagOperation = {
+              ...running,
+              ...outcome,
+              finishedAt: outcome.finishedAt ?? new Date(),
+            };
+
+            const record: TagOperationRecord = {
+              kind: running.kind,
+              succeeded: finished.status === "succeeded",
+              at: finished.finishedAt!,
+            };
+
+            const index = running.tagUID
+              ? state.nfc.scanHistory.findIndex((tag) => tag.uid === running.tagUID)
+              : -1;
+
+            const annotate = (tag: ScannedTag): ScannedTag => ({
+              ...tag,
+              operations: [...(tag.operations ?? []), record],
+            });
+
+            return {
+              nfc: {
+                ...state.nfc,
+                operation: finished,
+                lastTag:
+                  state.nfc.lastTag && state.nfc.lastTag.uid === running.tagUID
+                    ? annotate(state.nfc.lastTag)
+                    : state.nfc.lastTag,
+                scanHistory:
+                  index === -1
+                    ? state.nfc.scanHistory
+                    : state.nfc.scanHistory.map((tag, i) => (i === index ? annotate(tag) : tag)),
+              },
+            };
+          }),
+        clearTagOperation: () => patchNFC({ operation: null }),
 
         discovery: initialDiscoveryState,
         setSearching: (isSearching) => patchDiscovery({ isSearching }),
@@ -325,6 +385,17 @@ const reviveTag = (value: unknown): ScannedTag | null => {
     return null;
   }
 
+  const operations = Array.isArray(tag.operations)
+    ? tag.operations
+        .map((entry): TagOperationRecord | null => {
+          const at = toDate(entry?.at);
+          return at && (entry.kind === "write" || entry.kind === "transceive")
+            ? { kind: entry.kind, succeeded: entry.succeeded === true, at }
+            : null;
+        })
+        .filter((entry): entry is TagOperationRecord => entry !== null)
+    : undefined;
+
   return {
     uid: tag.uid,
     technology: tag.technology ?? "Unknown",
@@ -332,6 +403,7 @@ const reviveTag = (value: unknown): ScannedTag | null => {
     scannedAt,
     ndefMessage: tag.ndefMessage,
     sentToServer: tag.sentToServer === true,
+    ...(operations?.length ? { operations } : {}),
   };
 };
 
@@ -372,6 +444,7 @@ export function mergePersisted(persisted: unknown, current: AppStore): AppStore 
       ...current.nfc,
       scanHistory,
       lastTag: null,
+      operation: null,
       isActive: false,
       processingEnabled: true,
     },
