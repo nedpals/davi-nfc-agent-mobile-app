@@ -38,6 +38,11 @@ export interface DeviceCapabilities {
   deviceType?: string;
   supportedTagTypes?: string[];
   maxBaudRate?: number;
+
+  // How long this device can keep a tag available for work after reporting it.
+  // Omitted means open-ended, which is what a reader holding a tag in its field
+  // offers and how every device behaved before the field existed.
+  maxHoldMs?: number;
 }
 
 export interface DeviceMetadata {
@@ -186,6 +191,110 @@ export interface ErrorMessage extends BaseMessage {
 // person to present the tag again rather than resending on a timer.
 export const ERROR_CODE_TAG_REMOVED = "TAG_REMOVED";
 
+// The outcomes an operation can report, from the agent's error taxonomy.
+export const DEVICE_ERROR_CODES = {
+  notSupported: "NOT_SUPPORTED",
+  tagRemoved: "TAG_REMOVED",
+  tagNotConnected: "TAG_NOT_CONNECTED",
+  invalidData: "INVALID_DATA",
+  timeout: "TIMEOUT",
+
+  writeFailed: "WRITE_FAILED",
+  readOnly: "READ_ONLY",
+  capacityExceeded: "CAPACITY_EXCEEDED",
+
+  transceiveFailed: "TRANSCEIVE_FAILED",
+} as const;
+
+export type DeviceErrorCode = (typeof DEVICE_ERROR_CODES)[keyof typeof DEVICE_ERROR_CODES];
+
+// The record form the agent sends when it cannot send encoded bytes. Kept for
+// completeness: this device writes ndefBytes, which the agent calls
+// authoritative where the two disagree.
+export interface NDEFRecordInput {
+  recordType?: "text" | "uri" | "mime" | "external";
+  content?: string;
+  language?: string;
+  mimeType?: string;
+  tnf?: number;
+  // Go encodes []byte as base64, so these arrive as strings rather than arrays.
+  type?: string;
+  id?: string;
+  payload?: string;
+}
+
+export interface NDEFMessageInput {
+  records: NDEFRecordInput[];
+}
+
+export interface DeviceWriteRequestPayload {
+  requestID: string;
+  deviceID: string;
+  ndefMessage?: NDEFMessageInput;
+  // The same message already encoded, base64 on the wire. Authoritative where
+  // it and ndefMessage disagree.
+  ndefBytes?: string;
+  // When set, the write is meant for this tag; anything else present is a
+  // different tag and the write must be refused rather than misapplied.
+  tagUID?: string;
+  lock?: boolean;
+  // Identifies the logical write. The same request can arrive twice when a
+  // response is lost, and a tag written twice is not the same as written once.
+  idempotencyKey?: string;
+}
+
+export interface DeviceWriteRequestMessage extends BaseMessage {
+  type: "deviceWriteRequest";
+  payload: DeviceWriteRequestPayload;
+}
+
+export interface DeviceWriteResponsePayload {
+  requestID: string;
+  success: boolean;
+  error?: string;
+  // Preferred over parsing the error string.
+  errorCode?: DeviceErrorCode;
+}
+
+export interface DeviceWriteResponseMessage extends BaseMessage {
+  type: "deviceWriteResponse";
+  payload: DeviceWriteResponsePayload;
+}
+
+export interface DeviceTransceiveRequestPayload {
+  requestID: string;
+  deviceID: string;
+  // Command bytes, base64 on the wire.
+  data: string;
+  tagUID?: string;
+  // Framing-level exchange (Android NfcA.transceive) rather than APDU-level
+  // (IsoDep.transceive). Different technology, so a different session.
+  raw?: boolean;
+  // Bounds this one exchange. The agent allows itself a second more than it
+  // asks for, so a device that honours its own deadline reports a real error
+  // instead of racing the agent's.
+  timeoutMs?: number;
+}
+
+export interface DeviceTransceiveRequestMessage extends BaseMessage {
+  type: "deviceTransceiveRequest";
+  payload: DeviceTransceiveRequestPayload;
+}
+
+export interface DeviceTransceiveResponsePayload {
+  requestID: string;
+  success: boolean;
+  // The tag's reply, base64 on the wire.
+  data?: string;
+  error?: string;
+  errorCode?: DeviceErrorCode;
+}
+
+export interface DeviceTransceiveResponseMessage extends BaseMessage {
+  type: "deviceTransceiveResponse";
+  payload: DeviceTransceiveResponsePayload;
+}
+
 // Pairing exchanges the kiosk's PIN for a credential belonging to this device.
 export interface PairRequest {
   deviceName: string;
@@ -231,11 +340,15 @@ export type OutgoingMessage =
   | TagScannedMessage
   | TagRemovedMessage
   | DeviceHeartbeatMessage
+  | DeviceWriteResponseMessage
+  | DeviceTransceiveResponseMessage
   | GoodbyeMessage;
 
 export type IncomingMessage =
   | HelloResponse
   | RegisterDeviceResponse
+  | DeviceWriteRequestMessage
+  | DeviceTransceiveRequestMessage
   | ErrorMessage;
 
 // Discovered server from mDNS

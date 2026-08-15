@@ -144,8 +144,83 @@ to tear it down. An error the agent marks non-retryable — a registration it
 refuses — stops the reconnect loop instead of spending its ten attempts on an
 answer that will not change.
 
-Capabilities are declared per platform and honestly: read only, no transceive,
-no lock, and MIFARE Classic on Android only, since CoreNFC cannot reach it.
+Capabilities are declared per platform and honestly: MIFARE Classic on Android
+only since CoreNFC cannot reach it, and writing and transceive on Android only —
+see below.
+
+## Writing tags
+
+The agent can ask this device to write the tag it is holding, via
+`deviceWriteRequest`, and waits up to 20 seconds for a `deviceWriteResponse`.
+
+**Android only.** Writing needs a technology session over a tag already in the
+field. Reader mode provides that, and `requestTechnology` reuses the
+registration the scanner already holds rather than opening its own — so a write
+slots into the running scan loop instead of interrupting it, and cancelling
+afterwards does not tear the loop down.
+
+**iOS declares `canWrite: false`.** CoreNFC sessions are user-initiated and
+modal: there is no held tag to write into, so an agent-driven write would have
+to raise a system sheet and wait for someone to present the tag again. Against a
+20-second deadline that is a race, and the agent routes around a device that
+says it cannot write rather than timing out on one that says it can.
+
+## How long a tag stays available
+
+The agent already delimits a hold with `tagScanned` and `tagRemoved`; what it
+could not tell was how long one lasts. `maxHoldMs` in the declared capabilities
+answers that.
+
+Android omits it. Reader mode keeps a tag available for as long as it sits in
+the field, so the hold is open-ended — the same thing a bench reader offers, and
+what every device implied before the field existed.
+
+iOS declares `18000`. CoreNFC connects a tag for roughly twenty seconds and
+[cannot renew it](https://community.st.com/t5/st25-nfc-rfid-tags-and-readers/ios-nfc-restartpolling/td-p/734726)
+— `restartPolling` stopped extending sessions from iPhone 15 onward. The
+declared figure sits under the measured limit so the agent's margin is not the
+only one.
+
+It is declared once at registration rather than repeated on every scan, because
+it describes the device and not the tag: CoreNFC's limit is the same whichever
+tag is present. The deadline for a given tag is the arrival of its `tagScanned`
+plus this, and the agent treats that as advice about what is worth attempting —
+never as a gate, since a device that declares nothing is open-ended.
+
+**This does not yet make iOS able to write.** It tells the agent what an iOS
+device could offer once the CoreNFC hold flow exists; `canWrite` stays `false`
+until it does.
+
+`ndefBytes` is written in preference to the record form. It is the message the
+agent already encoded and the one it calls authoritative, so nothing is lost in
+translation; the record form is the fallback for agents that send only records.
+
+`idempotencyKey` is honoured: the same key reports the first outcome instead of
+writing again, because a repeated request means a lost response rather than a
+second write. Failures answer with the agent's own codes — `READ_ONLY`,
+`CAPACITY_EXCEEDED`, `TAG_REMOVED` — so it can tell a refusal from a retry, and
+a refusal is always answered rather than left to time out.
+
+## Transceive
+
+`deviceTransceiveRequest` exchanges raw bytes with the tag and hands back its
+reply, on the same Android-only terms as writing and over the same reused
+session. `raw` picks framing-level exchange (`NfcA`) over APDU-level
+(`IsoDep`) — a different technology, and a tag that answers one may not answer
+the other.
+
+**There is no idempotency key here, and that is right.** An exchange is a
+question to the tag, and only the agent knows whether asking twice is safe. So
+every request reaches the tag, and deciding whether to repeat one stays with the
+caller.
+
+`timeoutMs` is honoured on this side. The agent allows itself a second more than
+it asks for, so a device that keeps its own deadline reports a real error
+instead of both ends racing to time out — and the session is closed either way,
+rather than left open holding the tag.
+
+Worth knowing before reaching for it: each command is one network round trip.
+That is fine for DESFire or ISO-DEP work, and the wrong tool for bulk reading.
 
 Device identity is per-connection: the agent mints a fresh `deviceID` on each
 registration and drops it when the socket closes, so a reconnect is a new
