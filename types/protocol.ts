@@ -38,6 +38,11 @@ export interface DeviceCapabilities {
   deviceType?: string;
   supportedTagTypes?: string[];
   maxBaudRate?: number;
+
+  // How long this device can keep a tag available for work after reporting it.
+  // Omitted means open-ended, which is what a reader holding a tag in its field
+  // offers and how every device behaved before the field existed.
+  maxHoldMs?: number;
 }
 
 export interface DeviceMetadata {
