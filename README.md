@@ -120,10 +120,22 @@ Since RN offers no injection point on iOS, the module swizzles
 variant. That avoids forking React Native or replacing its WebSocket module, at
 the cost of depending on an initializer signature RN could change.
 
-**When it cannot be enforced** — in Expo Go, or any build without the module,
-`applyPinning` reports `unavailable`. The connection is still made and is *not*
-verified; Settings says so, and the socket layer logs a warning rather than
-letting it read as secure.
+**When it cannot be enforced, the connection is refused.** A pin that is not
+checked is worth nothing, and an unverified socket is indistinguishable from a
+verified one once it is open — a warning nobody reads is not a control. So a
+held pin that cannot be honoured fails the connect rather than downgrading it:
+
+- **No native module** — Expo Go, or a build predating it. Nothing else works
+  there either, since discovery and scanning are native too, so this costs no
+  working setup.
+- **A cleartext URL for an agent paired over TLS.** The pin cannot apply to
+  `ws://`, and reporting the connection as pinned would be a lie. If the agent
+  genuinely runs with `-auto-tls=false` now, its identity basis changed —
+  unpair and pair again.
+
+Settings reports which of the two it is. `describePinning` answers the same
+question without dialling anything, so the screen can say whether a pin is
+enforceable before a connection is attempted; only `applyPinning` refuses.
 
 ## Protocol
 

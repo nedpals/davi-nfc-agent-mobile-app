@@ -8,7 +8,7 @@ import {
 } from "@/constants/config";
 import { buildDeviceUrl } from "@/services/agent-url";
 import { loadCredential } from "@/services/credentials";
-import { applyPinning } from "@/services/pinning";
+import { PinningError, applyPinning } from "@/services/pinning";
 import { useAppStore } from "@/stores";
 import {
   DEVICE_SUBPROTOCOL_V1,
@@ -127,12 +127,20 @@ class WebSocketService {
 
     // Arm pinning before the socket is opened — it takes effect for connections
     // made after this point, not for one already in flight.
-    const pinning = applyPinning(credential);
-    store.setPinningState(pinning.status);
-    if (pinning.status === "unavailable") {
-      console.warn(
-        "[WebSocket] This build cannot verify the agent's key pin. The connection is not authenticated against it.",
-      );
+    //
+    // A held pin that cannot be honoured refuses the connection rather than
+    // downgrading it quietly: an unverified socket is indistinguishable from a
+    // verified one once it is open, and the person watching would have no way
+    // to tell.
+    try {
+      const pinning = applyPinning(credential, wsUrl);
+      store.setPinningState(pinning.status);
+    } catch (error) {
+      if (error instanceof PinningError) {
+        store.setPinningState(error.status);
+        store.failConnection(error.message);
+      }
+      throw error;
     }
 
     // Hold the caller's URL rather than the dialled one: the dialled URL

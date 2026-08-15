@@ -22,22 +22,44 @@ function getNativeModule(): PinningNativeModule | null {
   return nativeModule;
 }
 
-export type PinningState =
-  | { status: "pinned"; pin: string }
+export type PinningStatus =
+  // The agent's key will be checked on this connection.
+  | "pinned"
   // The agent serves no TLS, so there is no key to pin and nothing to verify.
-  | { status: "not-applicable" }
-  // A pin is held but cannot be enforced by this build. The connection will
-  // still be made, and it is not verified — callers should say so rather than
-  // let it read as secure.
-  | { status: "unavailable"; pin: string };
+  | "not-applicable"
+  // A pin is held but this build cannot check it.
+  | "unavailable"
+  // A pin is held and the connection is not TLS, so the pin cannot apply.
+  | "downgraded";
+
+export interface PinningState {
+  status: PinningStatus;
+  pin?: string;
+}
 
 /**
- * Arm public-key pinning for the connection about to be opened.
- *
- * Applies to sockets opened after this returns; one already open keeps the
- * trust it was opened with.
+ * Refused rather than connected. Carries the status so a caller can say which
+ * of the two refusals it was.
  */
-export function applyPinning(credential: AgentCredential | null): PinningState {
+export class PinningError extends Error {
+  readonly status: PinningStatus;
+
+  constructor(message: string, status: PinningStatus) {
+    super(message);
+    this.name = "PinningError";
+    this.status = status;
+  }
+}
+
+/**
+ * What this build could do with the credential it holds, without dialling
+ * anything. Settings asks this so it can say whether the pin is enforceable
+ * before a connection is attempted.
+ *
+ * Reports rather than refuses, and cannot see a downgrade — that depends on the
+ * URL, which only `applyPinning` has.
+ */
+export function describePinning(credential: AgentCredential | null): PinningState {
   const pin = credential?.publicKeyPin ?? "";
   const native = getNativeModule();
 
@@ -46,8 +68,46 @@ export function applyPinning(credential: AgentCredential | null): PinningState {
     return { status: "not-applicable" };
   }
 
+  return native?.isSupported ? { status: "pinned", pin } : { status: "unavailable", pin };
+}
+
+/**
+ * Arm public-key pinning for the connection about to be opened.
+ *
+ * Applies to sockets opened after this returns; one already open keeps the
+ * trust it was opened with.
+ *
+ * **Throws rather than returning when a held pin cannot be honoured.** A pin
+ * that is not checked is worth nothing, and a connection that proceeds anyway
+ * looks exactly like one that verified — which is the failure most likely to be
+ * mistaken for security. Refusing is the only outcome that cannot be misread.
+ */
+export function applyPinning(credential: AgentCredential | null, wsUrl: string): PinningState {
+  const pin = credential?.publicKeyPin ?? "";
+  const native = getNativeModule();
+
+  if (!pin) {
+    // Clearing matters: a previous connection may have left a pin armed, and
+    // carrying it to an agent that serves no TLS would refuse a valid one.
+    native?.setPin(null);
+    return { status: "not-applicable" };
+  }
+
+  if (!wsUrl.startsWith("wss://")) {
+    native?.setPin(null);
+    throw new PinningError(
+      "This agent was paired over TLS, so a cleartext connection cannot be verified. " +
+        "If the agent now runs with -auto-tls=false, unpair and pair again.",
+      "downgraded",
+    );
+  }
+
   if (!native?.isSupported) {
-    return { status: "unavailable", pin };
+    throw new PinningError(
+      "This build cannot verify the agent's key. Pinning needs a development build; " +
+        "it is not available in Expo Go.",
+      "unavailable",
+    );
   }
 
   native.setPin(pin);

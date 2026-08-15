@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { clearCredential, loadCredential, saveCredential } from "@/services/credentials";
 import { pairWithAgent } from "@/services/pairing";
-import { applyPinning } from "@/services/pinning";
+import { describePinning } from "@/services/pinning";
 import { useAppStore } from "@/stores";
 import { toPairingSummary } from "@/types/protocol";
 
@@ -22,9 +22,9 @@ export function usePairing() {
   const refresh = useCallback(async () => {
     const stored = await loadCredential();
     setPairing(stored ? toPairingSummary(stored) : null);
-    // Arming here as well as at connect time means Settings can report whether
-    // the pin is enforceable before anything is dialled.
-    setPinningState(applyPinning(stored).status);
+    // Reported here as well as armed at connect time, so Settings can say
+    // whether the pin is enforceable before anything is dialled.
+    setPinningState(describePinning(stored).status);
   }, [setPairing, setPinningState]);
 
   useEffect(() => {
@@ -40,7 +40,7 @@ export function usePairing() {
         // else can fail.
         await saveCredential(credential);
         setPairing(toPairingSummary(credential));
-        setPinningState(applyPinning(credential).status);
+        setPinningState(describePinning(credential).status);
         return credential;
       } finally {
         setIsPairing(false);
@@ -52,7 +52,7 @@ export function usePairing() {
   const unpair = useCallback(async () => {
     await clearCredential();
     setPairing(null);
-    setPinningState(applyPinning(null).status);
+    setPinningState(describePinning(null).status);
   }, [setPairing, setPinningState]);
 
   return {
