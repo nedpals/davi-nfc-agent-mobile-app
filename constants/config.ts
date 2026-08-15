@@ -32,10 +32,9 @@ export const WS_CONFIG = {
   },
 };
 
-// How long CoreNFC keeps a tag connected once a session reaches it. The limit
-// is Apple's, is roughly twenty seconds, and cannot be renewed — restartPolling
-// stopped extending sessions from iPhone 15 onward. Declared a little under the
-// measured limit so the agent's own margin is not the only one.
+// CoreNFC holds a tag for roughly twenty seconds and cannot renew —
+// restartPolling stopped extending sessions from iPhone 15 onward. Declared
+// under that so the agent's margin is not the only one.
 export const IOS_TAG_HOLD_MS = 18_000;
 
 // How many scans the app keeps, and how many of those survive a restart.
@@ -94,29 +93,20 @@ export const getDeviceCapabilities = () => {
 
   return {
     canRead: true,
-    // Android only. Writing needs a technology session over a tag already in
-    // the field, which reader mode provides; CoreNFC sessions are user-initiated
-    // and modal, so an agent-driven write cannot complete without the person
-    // presenting the tag to a system sheet.
+    // Everything the agent drives needs a held tag, which only Android has —
+    // see NFCService.canWrite.
     canWrite: !isIOS,
-    nfcType: isIOS ? "corenfc" : "isodep",
-
-    // Both exchange levels ride on the same session a write uses, so they
-    // follow the same platform line.
     canTransceive: !isIOS,
     canTransceiveRaw: !isIOS,
-    // Locking rides on the same session a write uses.
     canLock: !isIOS,
+    nfcType: isIOS ? "corenfc" : "isodep",
 
     deviceType: "smartphone",
     supportedTagTypes: isIOS
       ? ["NTAG", "MIFARE Ultralight", "ISO-DEP"]
       : ["NTAG", "MIFARE Ultralight", "MIFARE Classic", "ISO-DEP"],
 
-    // Android's reader mode keeps a tag available for as long as it sits in the
-    // field, so the hold is open-ended and the field is omitted. CoreNFC
-    // connects a tag for about twenty seconds and cannot renew that, so an
-    // agent has that long to get its work done.
+    // Omitted on Android, where a tag stays available until it leaves the field.
     ...(isIOS ? { maxHoldMs: IOS_TAG_HOLD_MS } : {}),
   };
 };

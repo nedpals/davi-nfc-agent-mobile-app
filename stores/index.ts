@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
+import type { PinningStatus } from "@/services/pinning";
 import type {
   ConnectionStatus,
   DiscoveredServer,
@@ -30,7 +31,7 @@ interface ConnectionState {
   // Whether the agent's key pin can actually be enforced by this build.
   // "unavailable" means a pin is held but cannot be checked, which is worth
   // showing rather than letting the connection read as verified.
-  pinningState: "pinned" | "not-applicable" | "unavailable";
+  pinningState: PinningStatus;
   // Which retry is in flight, so "Reconnecting" can say how far along it is.
   reconnectAttempt: number;
   // Set when the user disconnected on purpose. Discovery re-arms itself

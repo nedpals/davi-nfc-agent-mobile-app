@@ -1,3 +1,4 @@
+import * as SecureStore from "expo-secure-store";
 import { useAppStore } from "@/stores";
 import { DEVICE_SUBPROTOCOL_V1 } from "@/types/protocol";
 
@@ -588,5 +589,57 @@ describe("transceive requests from the agent", () => {
     // An exchange is a question to the tag; whether repeating it is safe is the
     // agent's call, so every request reaches the tag.
     expect(handler).toHaveBeenCalledTimes(2);
+  });
+});
+
+
+describe("refusing a connection the pin cannot cover", () => {
+  // The native pinning module is absent under jest, exactly as it is in Expo Go
+  // or any build without it — so a held pin here cannot be enforced.
+  const pinnedCredential = () =>
+    JSON.stringify({
+      host: "192.168.1.5",
+      agentPort: 9470,
+      deviceID: "device-123",
+      deviceToken: "token",
+      publicKeyPin: "sha256/47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=",
+    });
+
+  it("refuses rather than connecting unverified", async () => {
+    (SecureStore.getItemAsync as jest.Mock).mockResolvedValueOnce(pinnedCredential());
+
+    await expect(websocketService.connect("192.168.1.5:9470")).rejects.toThrow(/cannot verify/i);
+
+    // The point of refusing: no socket exists to be mistaken for a safe one.
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(useAppStore.getState().connection.pinningState).toBe("unavailable");
+    expect(useAppStore.getState().connection.status).toBe("error");
+  });
+
+  it("refuses a cleartext connection to an agent it paired with over TLS", async () => {
+    (SecureStore.getItemAsync as jest.Mock).mockResolvedValueOnce(pinnedCredential());
+
+    await expect(websocketService.connect("ws://192.168.1.5:9470")).rejects.toThrow(/cleartext/i);
+
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(useAppStore.getState().connection.pinningState).toBe("downgraded");
+  });
+
+  it("still connects when there is no pin to honour", async () => {
+    // An agent serving no TLS pairs without a key, so there is nothing to
+    // verify and cleartext is the understood arrangement rather than a downgrade.
+    (SecureStore.getItemAsync as jest.Mock).mockResolvedValueOnce(
+      JSON.stringify({
+        host: "192.168.1.5",
+        agentPort: 9470,
+        deviceID: "device-123",
+        deviceToken: "token",
+        publicKeyPin: "",
+      })
+    );
+
+    await openConnection("ws://192.168.1.5:9470");
+
+    expect(useAppStore.getState().connection.pinningState).toBe("not-applicable");
   });
 });
