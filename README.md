@@ -106,6 +106,36 @@ the pin outlives the certificate.
 > run — it was authored in an environment with no Android SDK and no Xcode. Treat
 > the first device build as the real test.
 
+## When a connection fails
+
+The platform's own text is what a failure arrives as, and on Android that is a
+Java exception. An unpaired device dialling an agent that serves its own
+certificate gets `java.security.cert.CertPathValidatorException: Trust anchor
+for certification path not found.`, which is accurate and tells nobody what to
+do about it.
+
+Failures are translated into what to do instead. The untrusted-certificate case
+points at pairing, because that is the fix: pairing hands over the key the device
+recognizes the agent by, which is what replaces a certificate authority here.
+
+A **pin mismatch** is deliberately a different message from an **untrusted
+certificate**, since the remedies differ — the first means re-pair, the second
+means pair for the first time.
+
+An unrecognised failure is shown verbatim. Flattening it into something generic
+would hide the only evidence of what went wrong.
+
+**A failure that cannot come out differently is not retried.** An untrusted
+certificate and a mismatched pin both need someone to pair; retrying them spends
+the reconnect budget to arrive at the same place, and the agent's log fills with
+one handshake rejection per attempt. Those stop the loop and report. An agent
+that merely did not answer stays retryable — it may be starting, or the network
+may come back.
+
+Note that not every agent needs pairing to connect: one given a real certificate
+with `-cert`/`-key` validates normally, which is why an untrusted certificate is
+reported rather than refused up front.
+
 ## Verifying the pin
 
 `modules/agent-pinning` is a local Expo module that enforces the pin, because

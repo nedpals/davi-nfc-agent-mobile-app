@@ -643,3 +643,39 @@ describe("refusing a connection the pin cannot cover", () => {
     expect(useAppStore.getState().connection.pinningState).toBe("not-applicable");
   });
 });
+
+
+describe("reporting why a connection failed", () => {
+  it("rejects connect with an explanation rather than the platform's exception", async () => {
+    const connecting = websocketService.connect("192.168.100.2:9470");
+    await tick();
+
+    // What an Android device reports when it dials an agent serving its own
+    // certificate without having paired first.
+    FakeWebSocket.last().triggerClose(
+      1006,
+      "java.security.cert.CertPathValidatorException: Trust anchor for certification path not found."
+    );
+
+    await expect(connecting).rejects.toThrow(/pair with the agent/i);
+  });
+
+  it("stops retrying a certificate it will never trust", async () => {
+    const connecting = websocketService.connect("192.168.100.2:9470");
+    await tick();
+
+    FakeWebSocket.last().triggerClose(
+      1006,
+      "java.security.cert.CertPathValidatorException: Trust anchor for certification path not found."
+    );
+    await expect(connecting).rejects.toThrow();
+
+    // Long enough for a retry to have been scheduled and fired.
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    // One socket, not a loop of them: the agent logged this failure once per
+    // attempt, and every attempt could only end the same way.
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(useAppStore.getState().connection.status).toBe("error");
+  });
+});

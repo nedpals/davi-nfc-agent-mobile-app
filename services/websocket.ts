@@ -7,6 +7,10 @@ import {
   getDeviceName,
 } from "@/constants/config";
 import { buildDeviceUrl } from "@/services/agent-url";
+import {
+  describeConnectionFailure,
+  isTerminalConnectionFailure,
+} from "@/services/connection-errors";
 import { loadCredential } from "@/services/credentials";
 import { PinningError, applyPinning } from "@/services/pinning";
 import { useAppStore } from "@/stores";
@@ -215,14 +219,23 @@ class WebSocketService {
         // auth failure arrives here as a handshake error rather than as a close
         // frame or an error message on the socket.
         const detail = (error as { message?: string } | undefined)?.message;
-        useAppStore.getState().setConnectionError(detail || "WebSocket connection error");
+        useAppStore.getState().setConnectionError(describeConnectionFailure(detail));
       };
 
       socket.onclose = (event) => {
         console.log("[WebSocket] Closed:", event.code, event.reason);
+        const failure = describeConnectionFailure(event.reason);
         // A socket that closes before it ever opened has to reject the connect
         // call itself; nothing else will, and the caller would wait forever.
-        settle(new Error(event.reason || "The agent closed the connection"));
+        settle(new Error(failure));
+
+        if (isTerminalConnectionFailure(event.reason)) {
+          // Retrying cannot change a certificate this device does not trust.
+          this.teardownState();
+          this.stopReconnecting(failure);
+          return;
+        }
+
         this.handleDisconnect();
       };
 
@@ -665,13 +678,20 @@ class WebSocketService {
     return new AgentError(message.error || code, code, retryable);
   }
 
-  private handleDisconnect(): void {
+  /** The cleanup every disconnect does, whatever is decided about retrying. */
+  private teardownState(): void {
     this.stopHeartbeat();
     this.clearPendingRequests();
 
     const store = useAppStore.getState();
     store.setRegistered(false);
     store.setDeviceId(null);
+  }
+
+  private handleDisconnect(): void {
+    this.teardownState();
+
+    const store = useAppStore.getState();
 
     if (this.isManualDisconnect) {
       store.setConnectionStatus("disconnected");
