@@ -5,8 +5,10 @@ An Expo app that turns a phone into a remote NFC reader for the
 tags and streams them to the agent, which broadcasts them to the agent's own
 clients.
 
-The phone is a read-only sensor: it reports tags, and the agent does not drive
-it. Writing, locking and erasing are hardware-reader operations.
+On Android the agent can also drive it: writing a tag, locking one, and
+exchanging raw commands with it. On iOS the phone stays a read-only sensor,
+because CoreNFC has no held tag for the agent to act on — see
+[Writing tags](#writing-tags).
 
 ## Running it
 
