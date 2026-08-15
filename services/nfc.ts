@@ -3,7 +3,14 @@ import { useAppStore } from "@/stores";
 import type { ScannedTag } from "@/types/protocol";
 import * as Haptics from "expo-haptics";
 import { AppState, type AppStateStatus, Platform } from "react-native";
-import NfcManager, { Ndef, NfcAdapter, NfcEvents, NfcTech } from "react-native-nfc-manager";
+import NfcManager, {
+  Ndef,
+  NdefStatus,
+  NfcAdapter,
+  NfcError,
+  NfcEvents,
+  NfcTech,
+} from "react-native-nfc-manager";
 import {
   base64ToBytes,
   base64ToString,
@@ -103,42 +110,126 @@ function toNdefRecord(record: NDEFRecordInput) {
   }
 }
 
-/**
- * Map what the platform reports onto the agent's taxonomy.
- *
- * The library surfaces most failures as a message rather than a code, so this
- * reads the text. An unrecognised failure stays WRITE_FAILED, which the agent
- * treats as retryable — the honest answer when the cause is unknown.
- */
-function classifyWriteError(error: unknown): DeviceErrorCode {
-  const message = describeNfcError(error).toLowerCase();
+// The library's own error strings, raised before it reaches the tag. Exact
+// values from its Android module rather than prose to match against.
+const MODULE_ERRORS: Record<string, DeviceErrorCode> = {
+  "no tech request available": "TAG_NOT_CONNECTED",
+  "you should requestTagEvent first": "TAG_NOT_CONNECTED",
+  "no reference available": "TAG_NOT_CONNECTED",
+  "unsupported tag api": "NOT_SUPPORTED",
+  "no nfc support": "NOT_SUPPORTED",
+  "transceive fail": "TRANSCEIVE_FAILED",
+};
 
-  if (message.includes("read-only") || message.includes("read only")) {
-    return "READ_ONLY";
+// Android reports a failure as the Java exception's toString(), which begins
+// with the fully-qualified class name — a far steadier thing to match on than
+// the message that follows it.
+const JAVA_EXCEPTIONS: [string, DeviceErrorCode][] = [
+  ["android.nfc.TagLostException", "TAG_REMOVED"],
+  ["android.nfc.FormatException", "INVALID_DATA"],
+  ["java.lang.IllegalStateException", "TAG_NOT_CONNECTED"],
+];
+
+/**
+ * Refuse a write the tag cannot accept, before attempting it.
+ *
+ * READ_ONLY, CAPACITY_EXCEEDED and NOT_SUPPORTED are the outcomes the agent
+ * treats as final, so they are the ones worth being certain about. getNdefStatus
+ * answers all three outright, where inferring them from a failed write means
+ * reading whatever text the platform happened to produce.
+ *
+ * A device too old to answer is not treated as a refusal — the write goes ahead
+ * and reports whatever actually happens.
+ */
+async function assertTagAccepts(bytes: number[]): Promise<void> {
+  let status: { status: NdefStatus; capacity: number };
+  try {
+    status = await NfcManager.ndefHandler.getNdefStatus();
+  } catch {
+    return;
   }
-  if (message.includes("not enough space") || message.includes("too large")) {
-    return "CAPACITY_EXCEEDED";
+
+  if (status.status === NdefStatus.NotSupported) {
+    throw new NFCOperationError("This tag does not support NDEF", "NOT_SUPPORTED");
   }
-  if (message.includes("tag was lost") || message.includes("connection lost")) {
-    return "TAG_REMOVED";
+
+  if (status.status === NdefStatus.ReadOnly) {
+    throw new NFCOperationError("This tag is locked", "READ_ONLY");
   }
-  if (message.includes("not supported") || message.includes("not ndef")) {
-    return "NOT_SUPPORTED";
+
+  if (status.capacity > 0 && bytes.length > status.capacity) {
+    throw new NFCOperationError(
+      `Message is ${bytes.length} bytes and the tag holds ${status.capacity}`,
+      "CAPACITY_EXCEEDED",
+    );
   }
-  return "WRITE_FAILED";
 }
 
-/** Same shape as classifyWriteError, for the failures an exchange reports. */
-function classifyTransceiveError(error: unknown): DeviceErrorCode {
-  const message = describeNfcError(error).toLowerCase();
+/**
+ * Make the tag read-only, and treat a refusal as one.
+ *
+ * The native call reports failure by resolving `false` rather than rejecting,
+ * so an unchecked await reports a lock that never happened — and the agent
+ * would go on believing the tag was sealed.
+ */
+async function lockTag(): Promise<void> {
+  let locked: unknown;
+  try {
+    locked = await NfcManager.ndefHandler.makeReadOnly();
+  } catch (error) {
+    throw new NFCOperationError(describeNfcError(error), classifyNfcError(error, "WRITE_FAILED"));
+  }
 
-  if (message.includes("tag was lost") || message.includes("connection lost")) {
-    return "TAG_REMOVED";
+  if (locked === false) {
+    throw new NFCOperationError("The tag refused to be locked", "WRITE_FAILED");
   }
-  if (message.includes("not supported") || message.includes("tech")) {
-    return "NOT_SUPPORTED";
+}
+
+/**
+ * Map a failure onto the agent's taxonomy.
+ *
+ * Three sources, in descending order of certainty: the typed errors the library
+ * raises from iOS's numeric NFCError codes, its own literal error strings, and
+ * the Java exception class names Android passes through as text.
+ *
+ * `fallback` is what an unrecognised failure becomes. Both candidates —
+ * WRITE_FAILED and TRANSCEIVE_FAILED — are retryable, which is the honest
+ * answer when the cause is unknown: the agent may try again rather than being
+ * told a thing is permanently impossible on a guess.
+ */
+function classifyNfcError(error: unknown, fallback: DeviceErrorCode): DeviceErrorCode {
+  // iOS turns its numeric NFCError codes into these, so they are exact.
+  if (error instanceof NfcError.TagNotWritable) return "READ_ONLY";
+  if (error instanceof NfcError.TagSizeTooSmall) return "CAPACITY_EXCEEDED";
+  if (error instanceof NfcError.ZeroLengthMessage) return "INVALID_DATA";
+  if (error instanceof NfcError.PacketTooLong) return "INVALID_DATA";
+  if (error instanceof NfcError.TagConnectionLost) return "TAG_REMOVED";
+  if (error instanceof NfcError.TagNotConnected) return "TAG_NOT_CONNECTED";
+  if (error instanceof NfcError.SessionInvalidated) return "TAG_NOT_CONNECTED";
+  // The person dismissed the scan sheet, or the radio is off. Neither is a
+  // property of the tag, and both clear on their own, so they stay retryable.
+  if (error instanceof NfcError.UserCancel) return "TAG_NOT_CONNECTED";
+  if (error instanceof NfcError.RadioDisabled) return "TAG_NOT_CONNECTED";
+  if (error instanceof NfcError.Timeout) return "TIMEOUT";
+  if (error instanceof NfcError.UnsupportedFeature) return "NOT_SUPPORTED";
+  if (error instanceof NfcError.TagUpdateFailure) return "WRITE_FAILED";
+  if (error instanceof NfcError.TagResponseError) return "TRANSCEIVE_FAILED";
+  if (error instanceof NfcError.RetryExceeded) return "TRANSCEIVE_FAILED";
+
+  const message = describeNfcError(error);
+
+  const moduleError = MODULE_ERRORS[message.trim().toLowerCase()];
+  if (moduleError) {
+    return moduleError;
   }
-  return "TRANSCEIVE_FAILED";
+
+  for (const [exception, code] of JAVA_EXCEPTIONS) {
+    if (message.startsWith(exception)) {
+      return code;
+    }
+  }
+
+  return fallback;
 }
 
 /**
@@ -460,14 +551,19 @@ class NFCService {
     }
 
     await this.withTechnology(NfcTech.Ndef, async () => {
+      // Asked before writing rather than inferred from a failure afterwards.
+      // These are the three outcomes the agent must not retry, and a wrong
+      // guess at them is what makes it retry something that can never work.
+      await assertTagAccepts(bytes);
+
       try {
         await NfcManager.ndefHandler.writeNdefMessage(bytes);
-
-        if (options.lock) {
-          await NfcManager.ndefHandler.makeReadOnly();
-        }
       } catch (error) {
-        throw new NFCOperationError(describeNfcError(error), classifyWriteError(error));
+        throw new NFCOperationError(describeNfcError(error), classifyNfcError(error, "WRITE_FAILED"));
+      }
+
+      if (options.lock) {
+        await lockTag();
       }
     });
   }
@@ -504,7 +600,10 @@ class NFCService {
         if (error instanceof NFCOperationError) {
           throw error;
         }
-        throw new NFCOperationError(describeNfcError(error), classifyTransceiveError(error));
+        throw new NFCOperationError(
+          describeNfcError(error),
+          classifyNfcError(error, "TRANSCEIVE_FAILED"),
+        );
       }
     });
   }
