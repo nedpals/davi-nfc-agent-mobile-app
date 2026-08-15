@@ -1,4 +1,5 @@
 import { act, renderHook, waitFor } from "@testing-library/react-native";
+import { STORED_ADDRESS_GRACE } from "@/constants/config";
 import { useAppStore } from "@/stores";
 import type { DiscoveredServer } from "@/types/protocol";
 
@@ -106,10 +107,9 @@ describe("auto-connecting", () => {
       useAppStore.getState().addDiscoveredServer(server("agent"));
     });
 
-    await waitFor(() =>
-      expect(websocketService.connectAndRegister).toHaveBeenCalledWith(
-        "wss://agent.local:9470/ws?mode=device"
-      )
+    await waitFor(() => expect(websocketService.connectAndRegister).toHaveBeenCalled());
+    expect((websocketService.connectAndRegister as jest.Mock).mock.calls[0][0]).toBe(
+      "wss://agent.local:9470/ws?mode=device"
     );
   });
 
@@ -143,5 +143,84 @@ describe("auto-connecting", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(websocketService.connectAndRegister).toHaveBeenCalledTimes(1);
+  });
+});
+
+// A network that carries no mDNS never answers, and the app would sit looking
+// for an agent whose address it is already holding.
+describe("falling back to the remembered address", () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  const remember = (url: string) => {
+    act(() => {
+      useAppStore.getState().setServerUrl(url);
+    });
+  };
+
+  it("dials the address it knows when discovery turns up nothing", () => {
+    remember("192.168.1.5:9470");
+    renderHook(() => useAutoConnect());
+
+    act(() => {
+      jest.advanceTimersByTime(STORED_ADDRESS_GRACE + 10);
+    });
+
+    // A single attempt: a stale address must not swallow the reconnect budget.
+    expect(websocketService.connectAndRegister).toHaveBeenCalledWith("192.168.1.5:9470", {
+      retryOnFailure: false,
+    });
+  });
+
+  it("gives discovery first refusal", () => {
+    remember("192.168.1.5:9470");
+    renderHook(() => useAutoConnect());
+
+    act(() => {
+      jest.advanceTimersByTime(STORED_ADDRESS_GRACE - 100);
+    });
+
+    expect(websocketService.connectAndRegister).not.toHaveBeenCalled();
+  });
+
+  it("leaves the remembered address alone once an agent answers", () => {
+    remember("192.168.1.5:9470");
+    renderHook(() => useAutoConnect());
+
+    act(() => {
+      useAppStore.getState().addDiscoveredServer(server("agent"));
+    });
+    act(() => {
+      jest.advanceTimersByTime(STORED_ADDRESS_GRACE + 10);
+    });
+
+    const dialled = (websocketService.connectAndRegister as jest.Mock).mock.calls.map(
+      ([url]) => url
+    );
+    expect(dialled).not.toContain("192.168.1.5:9470");
+  });
+
+  it("stays away after the user disconnected on purpose", () => {
+    remember("192.168.1.5:9470");
+    renderHook(() => useAutoConnect());
+
+    act(() => {
+      useAppStore.getState().disconnect();
+    });
+    act(() => {
+      jest.advanceTimersByTime(STORED_ADDRESS_GRACE + 10);
+    });
+
+    expect(websocketService.connectAndRegister).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when there is no address to remember", () => {
+    renderHook(() => useAutoConnect());
+
+    act(() => {
+      jest.advanceTimersByTime(STORED_ADDRESS_GRACE + 10);
+    });
+
+    expect(websocketService.connectAndRegister).not.toHaveBeenCalled();
   });
 });

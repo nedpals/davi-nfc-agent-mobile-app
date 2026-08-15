@@ -19,6 +19,8 @@ import { colors, radius, spacing, typography } from "@/constants/theme";
 import { useConnection, usePairing } from "@/hooks";
 import { hostFromAgentUrl } from "@/services/agent-url";
 import { useAppStore } from "@/stores";
+import { describeCapabilities } from "@/utils/capabilities";
+import { connectionLabel } from "@/utils/connection";
 import { formatDateTime, truncateMiddle } from "@/utils/format";
 
 const pinningLabel = {
@@ -314,8 +316,24 @@ export default function SettingsScreen() {
               <InfoRow label="Registered ID" value={deviceId ?? "Not registered"} mono />
               <InfoRow label="Platform" value={device.platform === "ios" ? "iOS" : "Android"} />
               <InfoRow label="App version" value={device.appVersion} />
-              <InfoRow label="Status" value={status} />
+              <InfoRow label="Status" value={connectionLabel(status)} />
               <InfoRow label="Last connected" value={formatDateTime(lastConnected)} />
+            </InfoRows>
+          </Section>
+
+          <Section
+            title="What this device offers"
+            footer="Sent to the agent when this device registers, so it knows what work to route here. Writing, locking and raw exchange need a tag held in the field, which CoreNFC cannot offer."
+          >
+            <InfoRows>
+              {describeCapabilities().map((capability) => (
+                <InfoRow
+                  key={capability.label}
+                  label={capability.label}
+                  value={capability.value}
+                  tone={capability.offered ? "default" : "muted"}
+                />
+              ))}
             </InfoRows>
           </Section>
 

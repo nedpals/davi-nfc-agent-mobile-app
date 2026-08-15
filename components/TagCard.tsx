@@ -1,8 +1,18 @@
-import { StyleSheet, Text, View } from "react-native";
+import * as Clipboard from "expo-clipboard";
+import * as Haptics from "expo-haptics";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Chip } from "./Chip";
 import { TagStatusBadge } from "./TagStatusBadge";
 import { colors, fontFamily, radius, shadows, spacing, typography } from "@/constants/theme";
-import { base64ByteLength, formatTimeAgo } from "@/utils/format";
-import type { NDEFRecord, ScannedTag } from "@/types/protocol";
+import { base64ByteLength, formatDateTime, formatTimeAgo } from "@/utils/format";
+import type { NDEFRecord, ScannedTag, TagOperationRecord } from "@/types/protocol";
+
+interface TagCardProps {
+  tag: ScannedTag;
+  expanded?: boolean;
+  onToggle?: () => void;
+}
 
 function describeRecord(record: NDEFRecord): string {
   const kind = record.recordType ?? `TNF ${record.tnf}`;
@@ -11,21 +21,66 @@ function describeRecord(record: NDEFRecord): string {
   return bytes ? `${kind} · ${bytes} bytes, not text` : `${kind} · empty`;
 }
 
-interface TagCardProps {
-  tag: ScannedTag;
+function describeOperationRecord(entry: TagOperationRecord): string {
+  const verb = entry.kind === "write" ? "Written" : "Exchange";
+  return entry.succeeded ? verb : `${verb} failed`;
 }
 
-export function TagCard({ tag }: TagCardProps) {
+export function TagCard({ tag, expanded, onToggle }: TagCardProps) {
   const records = tag.ndefMessage?.records ?? [];
+  const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (copiedTimer.current) {
+        clearTimeout(copiedTimer.current);
+      }
+    },
+    []
+  );
+
+  // A UID is what gets pasted into whatever the tag is being registered with,
+  // and retyping colon-separated hex by hand is its own kind of error.
+  const copyUid = useCallback(async () => {
+    await Clipboard.setStringAsync(tag.uid);
+    Haptics.selectionAsync().catch(() => {});
+
+    setCopied(true);
+    if (copiedTimer.current) {
+      clearTimeout(copiedTimer.current);
+    }
+    copiedTimer.current = setTimeout(() => setCopied(false), 1500);
+  }, [tag.uid]);
 
   return (
-    <View style={styles.card}>
+    <TouchableOpacity
+      style={styles.card}
+      onPress={onToggle}
+      disabled={!onToggle}
+      activeOpacity={0.85}
+      accessibilityRole={onToggle ? "button" : undefined}
+      accessibilityLabel={`Tag ${tag.uid}`}
+      accessibilityState={{ expanded: !!expanded }}
+    >
       <View style={styles.header}>
         <Text style={styles.uid} numberOfLines={1}>
           {tag.uid}
         </Text>
         <TagStatusBadge sent={tag.sentToServer} />
       </View>
+
+      {tag.operations?.length ? (
+        <View style={styles.operations}>
+          {tag.operations.map((entry, index) => (
+            <Chip
+              key={index}
+              label={describeOperationRecord(entry)}
+              tone={entry.succeeded ? "success" : "danger"}
+            />
+          ))}
+        </View>
+      ) : null}
 
       <View style={styles.meta}>
         <Text style={styles.metaText}>{tag.type}</Text>
@@ -35,22 +90,38 @@ export function TagCard({ tag }: TagCardProps) {
         <Text style={styles.metaText}>{formatTimeAgo(tag.scannedAt)}</Text>
       </View>
 
-      {records.length > 0 && (
-        <View style={styles.ndef}>
+      {!expanded && records.length > 0 && (
+        <Text style={styles.hint}>
+          {records.length === 1 ? "1 NDEF record" : `${records.length} NDEF records`}
+        </Text>
+      )}
+
+      {expanded && (
+        <View style={styles.detail}>
+          <Text style={styles.detailTime}>{formatDateTime(tag.scannedAt)}</Text>
+
           {records.map((record, index) => (
             <View key={index} style={styles.record}>
               {record.content ? (
-                <Text style={styles.recordContent} numberOfLines={3}>
-                  {record.content}
-                </Text>
+                <Text style={styles.recordContent}>{record.content}</Text>
               ) : (
                 <Text style={styles.recordRaw}>{describeRecord(record)}</Text>
               )}
             </View>
           ))}
+
+          <TouchableOpacity
+            style={styles.copy}
+            onPress={copyUid}
+            accessibilityRole="button"
+            accessibilityLabel={`Copy UID ${tag.uid}`}
+            hitSlop={8}
+          >
+            <Text style={styles.copyLabel}>{copied ? "Copied" : "Copy UID"}</Text>
+          </TouchableOpacity>
         </View>
       )}
-    </View>
+    </TouchableOpacity>
   );
 }
 
@@ -74,6 +145,12 @@ const styles = StyleSheet.create({
     color: colors.brand,
     fontFamily: fontFamily.mono,
   },
+  operations: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+  },
   meta: {
     flexDirection: "row",
     alignItems: "center",
@@ -88,12 +165,21 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.disabled,
   },
-  ndef: {
+  hint: {
+    ...typography.caption,
+    color: colors.textFaint,
+    marginTop: spacing.sm,
+  },
+  detail: {
     marginTop: spacing.md,
     paddingTop: spacing.md,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.border,
-    gap: spacing.xs,
+    gap: spacing.sm,
+  },
+  detailTime: {
+    ...typography.caption,
+    color: colors.textMuted,
   },
   record: {
     backgroundColor: colors.surfaceSunken,
@@ -109,5 +195,14 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textMuted,
     fontFamily: fontFamily.mono,
+  },
+  copy: {
+    alignSelf: "flex-start",
+    paddingVertical: spacing.xs,
+  },
+  copyLabel: {
+    ...typography.label,
+    color: colors.link,
+    fontWeight: "700",
   },
 });

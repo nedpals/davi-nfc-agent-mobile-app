@@ -1,16 +1,33 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Animated, PanResponder, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import {
+  ActivityIndicator,
+  Animated,
+  PanResponder,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Svg, { Path } from "react-native-svg";
+import { Chip } from "./Chip";
 import { TagStatusBadge } from "./TagStatusBadge";
 import { colors, fontFamily, radius, shadows, spacing, typography } from "@/constants/theme";
 import { formatClockTime } from "@/utils/format";
-import type { ScannedTag } from "@/types/protocol";
+import {
+  OPERATION_FAILURE_LINGER,
+  OPERATION_SUCCESS_LINGER,
+  describeOperation,
+} from "@/utils/operations";
+import type { ScannedTag, TagOperation } from "@/types/protocol";
 
 interface TagDrawerProps {
   tag: ScannedTag | null;
   onClear: () => void;
   onPress?: () => void;
+  // Work the agent is doing on this tag, which the person has to hold still for.
+  operation?: TagOperation | null;
+  onOperationDone?: () => void;
 }
 
 // Exported so a screen can keep its own content clear of the drawer instead of
@@ -19,7 +36,7 @@ export const TAG_DRAWER_HEIGHT = 64;
 
 const SWIPE_THRESHOLD = 80;
 
-function CloseIcon({ size = 20, color = colors.textFaint }) {
+function CloseIcon({ size = 20, color = colors.textFaint }: { size?: number; color?: string }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Path
@@ -33,7 +50,13 @@ function CloseIcon({ size = 20, color = colors.textFaint }) {
   );
 }
 
-export function TagDrawer({ tag, onClear, onPress }: TagDrawerProps) {
+export function TagDrawer({
+  tag,
+  onClear,
+  onPress,
+  operation = null,
+  onOperationDone,
+}: TagDrawerProps) {
   const insets = useSafeAreaInsets();
   const bottomOffset = Math.max(insets.bottom, spacing.lg) + spacing.sm;
   const hiddenOffset = TAG_DRAWER_HEIGHT + bottomOffset + 50;
@@ -45,10 +68,20 @@ export function TagDrawer({ tag, onClear, onPress }: TagDrawerProps) {
   const translateX = useRef(new Animated.Value(0)).current;
   const swipedAway = useRef(false);
 
+  const running = operation?.status === "running";
+  // An operation without a tag is still worth showing: it is how the agent
+  // asks for one.
+  const visible = Boolean(tag || operation);
+
   useEffect(() => {
     if (tag) {
-      swipedAway.current = false;
       setShownTag(tag);
+    }
+  }, [tag]);
+
+  useEffect(() => {
+    if (visible) {
+      swipedAway.current = false;
       translateX.setValue(0);
       Animated.spring(translateY, {
         toValue: 0,
@@ -76,7 +109,21 @@ export function TagDrawer({ tag, onClear, onPress }: TagDrawerProps) {
         setShownTag(null);
       }
     });
-  }, [tag, hiddenOffset, translateX, translateY]);
+  }, [visible, hiddenOffset, translateX, translateY]);
+
+  // An outcome is shown for a moment and then gets out of the way; a running
+  // operation stays until it finishes.
+  useEffect(() => {
+    if (!operation || operation.status === "running" || !onOperationDone) {
+      return;
+    }
+
+    const linger =
+      operation.status === "succeeded" ? OPERATION_SUCCESS_LINGER : OPERATION_FAILURE_LINGER;
+    const timer = setTimeout(onOperationDone, linger);
+
+    return () => clearTimeout(timer);
+  }, [operation, onOperationDone]);
 
   const panResponder = useMemo(
     () =>
@@ -85,7 +132,11 @@ export function TagDrawer({ tag, onClear, onPress }: TagDrawerProps) {
         // dismiss button and the card itself.
         onStartShouldSetPanResponder: () => false,
         onMoveShouldSetPanResponder: (_, gesture) =>
-          Math.abs(gesture.dx) > 8 && Math.abs(gesture.dx) > Math.abs(gesture.dy),
+          // Swiping the tag away mid-operation would withdraw the very tag the
+          // agent is working on, so the gesture is refused while it runs.
+          !running &&
+          Math.abs(gesture.dx) > 8 &&
+          Math.abs(gesture.dx) > Math.abs(gesture.dy),
         onPanResponderMove: (_, gesture) => {
           translateX.setValue(gesture.dx);
         },
@@ -110,12 +161,15 @@ export function TagDrawer({ tag, onClear, onPress }: TagDrawerProps) {
           }).start();
         },
       }),
-    [onClear, translateX]
+    [onClear, running, translateX]
   );
 
-  if (!shownTag) {
+  if (!shownTag && !operation) {
     return null;
   }
+
+  const copy = operation ? describeOperation(operation) : null;
+  const headline = shownTag?.uid ?? "No tag present";
 
   return (
     <Animated.View
@@ -128,37 +182,58 @@ export function TagDrawer({ tag, onClear, onPress }: TagDrawerProps) {
       <TouchableOpacity
         style={styles.content}
         onPress={onPress}
-        disabled={!onPress}
+        disabled={!onPress || !shownTag}
         activeOpacity={0.8}
         accessibilityRole={onPress ? "button" : undefined}
-        accessibilityLabel={`Last tag ${shownTag.uid}`}
+        accessibilityLabel={
+          copy ? `${headline}. ${copy.message}` : `Last tag ${headline}`
+        }
       >
         <View style={styles.info}>
-          <Text style={styles.uid} numberOfLines={1}>
-            {shownTag.uid}
+          <Text style={[styles.uid, !shownTag && styles.uidAbsent]} numberOfLines={1}>
+            {headline}
           </Text>
-          <View style={styles.meta}>
-            <Text style={styles.detail}>{shownTag.type}</Text>
-            <Text style={styles.separator}>·</Text>
-            <Text style={styles.detail}>{shownTag.technology}</Text>
-            <Text style={styles.separator}>·</Text>
-            <Text style={styles.detail}>{formatClockTime(shownTag.scannedAt)}</Text>
-          </View>
+
+          {copy ? (
+            <Text style={[styles.operation, copy.needsTagAgain && styles.operationUrgent]} numberOfLines={2}>
+              {copy.message}
+            </Text>
+          ) : (
+            shownTag && (
+              <View style={styles.meta}>
+                <Text style={styles.detail}>{shownTag.type}</Text>
+                <Text style={styles.separator}>·</Text>
+                <Text style={styles.detail}>{shownTag.technology}</Text>
+                <Text style={styles.separator}>·</Text>
+                <Text style={styles.detail}>{formatClockTime(shownTag.scannedAt)}</Text>
+              </View>
+            )
+          )}
         </View>
 
         <View style={styles.badge}>
-          <TagStatusBadge sent={shownTag.sentToServer} />
+          {running ? (
+            <ActivityIndicator size="small" color={colors.accent} />
+          ) : copy ? (
+            <Chip label={copy.chip} tone={copy.tone} />
+          ) : (
+            shownTag && <TagStatusBadge sent={shownTag.sentToServer} />
+          )}
         </View>
       </TouchableOpacity>
 
       <TouchableOpacity
         style={styles.close}
         onPress={onClear}
+        // Dismissing withdraws the tag the agent is working on: `currentTagUid`
+        // is this very tag, so clearing it would refuse the write in flight.
+        disabled={running}
         accessibilityRole="button"
         accessibilityLabel="Dismiss tag"
+        accessibilityState={{ disabled: running }}
         hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
       >
-        <CloseIcon />
+        <CloseIcon color={running ? colors.borderSubtle : colors.textFaint} />
       </TouchableOpacity>
     </Animated.View>
   );
@@ -193,6 +268,10 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.mono,
     marginBottom: 2,
   },
+  uidAbsent: {
+    fontFamily: undefined,
+    color: colors.textMuted,
+  },
   meta: {
     flexDirection: "row",
     alignItems: "center",
@@ -205,6 +284,14 @@ const styles = StyleSheet.create({
   separator: {
     ...typography.caption,
     color: colors.disabled,
+  },
+  operation: {
+    ...typography.caption,
+    color: colors.textMuted,
+  },
+  operationUrgent: {
+    color: colors.warningText,
+    fontWeight: "600",
   },
   badge: {
     marginLeft: spacing.sm,

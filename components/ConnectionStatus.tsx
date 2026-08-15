@@ -1,6 +1,7 @@
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { colors, radius, shadows, spacing, typography } from "@/constants/theme";
 import { WS_CONFIG } from "@/constants/config";
+import { connectionLabel } from "@/utils/connection";
 import type { ConnectionStatus as ConnectionStatusType } from "@/types/protocol";
 
 interface ConnectionStatusProps {
@@ -39,26 +40,21 @@ export function ConnectionStatus({
   const color = statusColor[status] ?? statusColor.disconnected;
   const busy = status === "connecting" || status === "reconnecting" || !!isSearching;
 
+  // The plain label, with the extra context this screen happens to have.
   const headline = () => {
     if (!isOnline) {
       return "No network";
     }
-    switch (status) {
-      case "registered":
-        return deviceName ? `Registered as ${deviceName}` : "Registered";
-      case "connected":
-        return "Connected";
-      case "connecting":
-        return "Connecting…";
-      case "reconnecting":
-        return reconnectAttempt
-          ? `Reconnecting (${reconnectAttempt}/${WS_CONFIG.RECONNECT.MAX_ATTEMPTS})`
-          : "Reconnecting…";
-      case "error":
-        return "Not connected";
-      default:
-        return isSearching ? "Looking for an agent" : "Disconnected";
+    if (status === "registered" && deviceName) {
+      return `Registered as ${deviceName}`;
     }
+    if (status === "reconnecting" && reconnectAttempt) {
+      return `Reconnecting (${reconnectAttempt}/${WS_CONFIG.RECONNECT.MAX_ATTEMPTS})`;
+    }
+    if (status === "disconnected" && isSearching) {
+      return "Looking for an agent";
+    }
+    return connectionLabel(status);
   };
 
   const detail = () => {

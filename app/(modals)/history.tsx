@@ -1,4 +1,5 @@
 import { useRouter } from "expo-router";
+import { useState } from "react";
 import { Alert, FlatList, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { EmptyState } from "@/components/EmptyState";
@@ -8,9 +9,13 @@ import { PERSISTED_HISTORY_LIMIT } from "@/constants/config";
 import { colors, spacing, typography } from "@/constants/theme";
 import { useNFC } from "@/hooks";
 
+/** Identifies a scan among repeats of the same tag. */
+const keyFor = (uid: string, at: Date) => `${uid}-${at.getTime()}`;
+
 export default function HistoryScreen() {
   const router = useRouter();
   const { scanHistory, clearHistory } = useNFC();
+  const [openKey, setOpenKey] = useState<string | null>(null);
 
   const handleClear = () => {
     Alert.alert("Clear scan history?", "This removes every scan kept on this device.", [
@@ -31,8 +36,17 @@ export default function HistoryScreen() {
 
       <FlatList
         data={scanHistory}
-        keyExtractor={(tag) => `${tag.uid}-${tag.scannedAt.getTime()}`}
-        renderItem={({ item }) => <TagCard tag={item} />}
+        keyExtractor={(tag) => keyFor(tag.uid, tag.scannedAt)}
+        renderItem={({ item }) => {
+          const key = keyFor(item.uid, item.scannedAt);
+          return (
+            <TagCard
+              tag={item}
+              expanded={openKey === key}
+              onToggle={() => setOpenKey((current) => (current === key ? null : key))}
+            />
+          );
+        }}
         contentContainerStyle={[styles.list, scanHistory.length === 0 && styles.listEmpty]}
         ItemSeparatorComponent={() => <View style={styles.separator} />}
         ListEmptyComponent={

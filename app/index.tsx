@@ -32,6 +32,7 @@ export default function ScannerScreen() {
     serverUrl,
     deviceName,
     isRegistered,
+    isConnected,
     error,
     reconnectAttempt,
     retry: retryConnection,
@@ -49,8 +50,10 @@ export default function ScannerScreen() {
     processingEnabled,
     lastTag,
     scanHistory,
+    operation,
     toggleProcessing,
     clearLastTag,
+    clearOperation,
     initError,
     openSystemSettings,
     canOpenSystemSettings,
@@ -98,7 +101,9 @@ export default function ScannerScreen() {
             <Ionicons name="time-outline" size={20} color={colors.brand} />
             {scanHistory.length > 0 && (
               <View style={styles.badge}>
-                <Text style={styles.badgeText}>
+                {/* The badge is a fixed circle, so its digits cannot grow with
+                    the system font without spilling out of it. */}
+                <Text style={styles.badgeText} maxFontSizeMultiplier={1.2}>
                   {scanHistory.length > 99 ? "99+" : scanHistory.length}
                 </Text>
               </View>
@@ -124,7 +129,9 @@ export default function ScannerScreen() {
         reconnectAttempt={reconnectAttempt}
         isSearching={isSearching}
         isOnline={isOnline}
-        onPress={() => router.push("/(modals)/server-list")}
+        // Choosing an agent is only useful when there is not one already; with
+        // a live connection the card leads to what can be done about it.
+        onPress={() => router.push(isConnected ? "/settings" : "/(modals)/server-list")}
         onRetry={status === "error" && isOnline ? handleRetry : undefined}
       />
 
@@ -159,12 +166,15 @@ export default function ScannerScreen() {
           processingEnabled={processingEnabled}
           disabled={readerState !== "ready"}
           disabledReason={READER_HINT[readerState]}
+          flashKey={lastTag ? `${lastTag.uid}-${lastTag.scannedAt.getTime()}` : undefined}
         />
       </View>
 
       <TagDrawer
         tag={lastTag}
+        operation={operation}
         onClear={clearLastTag}
+        onOperationDone={clearOperation}
         onPress={() => router.push("/(modals)/history")}
       />
     </SafeAreaView>
