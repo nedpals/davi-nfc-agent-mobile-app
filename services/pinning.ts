@@ -70,9 +70,7 @@ export function describePinning(credential: AgentCredential | null): PinningStat
   const pin = credential?.publicKeyPin ?? "";
   const native = getNativeModule();
 
-  // Checked before anything else: an agent serving no TLS has no key to check,
-  // which is a different answer from a key nothing checked.
-  if (!pin) {
+  if (!pin || credential?.keySource === "none") {
     native?.setPin(null);
     return { status: "not-applicable" };
   }
@@ -81,9 +79,7 @@ export function describePinning(credential: AgentCredential | null): PinningStat
     return { status: "unavailable", pin };
   }
 
-  // Absent on a credential stored before the field existed, which is the same
-  // situation it describes: that pairing was not pinned either.
-  return { status: credential?.pinVerified ? "pinned" : "unverified", pin };
+  return { status: credential?.keySource === "qr" ? "pinned" : "unverified", pin };
 }
 
 /**
@@ -123,7 +119,7 @@ export function applyPinning(credential: AgentCredential | null, wsUrl: string):
   // different key later, which is worth having even though it proves nothing
   // about the exchange that recorded it.
   native.setPin(pin);
-  return { status: credential?.pinVerified ? "pinned" : "unverified", pin };
+  return { status: credential?.keySource === "qr" ? "pinned" : "unverified", pin };
 }
 
 /**

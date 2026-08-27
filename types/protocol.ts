@@ -354,14 +354,32 @@ export interface AgentCredential {
   deviceToken: string;
   publicKeyPin: string;
   /**
-   * Whether the pairing connection itself was pinned to this key, which is what
-   * a pairing QR makes possible. False means the key was taken from whatever
-   * answered — the PIN authorized the exchange, but nothing proved the agent
-   * answering was the one that printed it. Absent on a credential stored before
-   * the field existed, which is that same situation.
+   * Where this agent's key came from, which is what decides whether it means
+   * anything. Written by `loadCredential` for a credential stored before the
+   * field existed, so nothing downstream has to handle its absence.
    */
-  pinVerified?: boolean;
+  keySource: KeySource;
 }
+
+/**
+ * How the agent's key reached this device.
+ *
+ * A single boolean could not carry this: "nothing verified the key" and "there
+ * is no key to verify" are different answers, and reading them apart meant
+ * consulting `publicKeyPin` first and in the right order. Naming the three
+ * states removes that coupling.
+ */
+export type KeySource =
+  /** Read off the agent's own pairing QR, and pinned for the exchange itself. */
+  | "qr"
+  /**
+   * Taken from whatever answered the pairing request. The PIN authorized the
+   * exchange, but nothing proved the agent answering was the one that printed
+   * it, so this key is trusted on first use.
+   */
+  | "response"
+  /** The agent serves no TLS, so there is no key and nothing to pin. */
+  | "none";
 
 // The part of a credential the UI may hold. The token is deliberately absent:
 // it is a bearer secret and the keychain is the only copy that should exist.
@@ -373,6 +391,7 @@ export function toPairingSummary(credential: AgentCredential): PairingSummary {
     agentPort: credential.agentPort,
     deviceID: credential.deviceID,
     publicKeyPin: credential.publicKeyPin,
+    keySource: credential.keySource,
   };
 }
 

@@ -136,6 +136,6 @@ export async function pairWithAgent(
     // Empty when the agent serves no TLS, which is a valid answer rather than a
     // missing one: it tells the device to connect over ws://.
     publicKeyPin,
-    pinVerified: keyPin !== null && publicKeyPin === keyPin,
+    keySource: !publicKeyPin ? "none" : keyPin !== null ? "qr" : "response",
   };
 }

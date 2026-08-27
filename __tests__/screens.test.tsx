@@ -224,6 +224,7 @@ describe("server list screen", () => {
         agentPort: 9470,
         deviceID: "device-1",
         publicKeyPin: "sha256/aaa",
+        keySource: "qr",
       });
     });
     render(<ServerListScreen />);
@@ -273,6 +274,7 @@ describe("pair screen", () => {
     deviceID: "device-1",
     deviceToken: "token",
     publicKeyPin: "sha256/aaa",
+    keySource: "qr" as const,
   };
 
   // Pairing exists to make the connection possible, so it is not finished until

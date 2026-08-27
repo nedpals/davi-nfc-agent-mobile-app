@@ -96,9 +96,13 @@ the phone's own camera**, which opens the link straight into the pair screen, or
 
 **Pairing without the QR still works, and says that it did.** Typing a bare PIN
 pairs trust-on-first-use: the PIN authorizes the exchange, but nothing proves
-the agent answering is the one that printed it, so the credential is stored with
-`pinVerified: false` and the screen says so before it is used. Read the QR where
-you can.
+the agent answering is the one that printed it. The credential records where its
+key came from — `keySource` is `qr`, `response` or `none` — and **Settings →
+Pairing** reports a `response` key as "Enforced, never verified" for as long as
+it is held, not just at the moment of pairing. The pin is still armed either
+way: a key taken from whatever answered refuses a different key later, which is
+worth having even though it proves nothing about the exchange that recorded it.
+Read the QR where you can.
 
 > Agent 1.2.0 moved this. Pairing used to be a plain HTTP POST to the bootstrap
 > listener on 9472, which handed the token and the key pin to anyone watching
