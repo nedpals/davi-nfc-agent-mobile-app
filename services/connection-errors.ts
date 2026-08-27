@@ -118,3 +118,49 @@ export function needsPairing(raw: string | undefined | null): boolean {
   const haystack = (raw ?? "").toLowerCase();
   return NEEDS_PAIRING.some((needle) => haystack.includes(needle));
 }
+
+/**
+ * WebSocket close codes the agent uses to say why a session ended.
+ *
+ * A close frame carries a code and, optionally, a reason. The agent phrases
+ * some of these and leaves others to the code alone, so the code is read first
+ * and the reason used to fill in what it cannot say.
+ */
+export const CLOSE_CODE = {
+  normal: 1000,
+  goingAway: 1001,
+  // Agent 1.2.0 ends the session of a device whose credential was revoked from
+  // the tray, and of one that sent a frame over the 256 KB cap.
+  policyViolation: 1008,
+  messageTooBig: 1009,
+} as const;
+
+/**
+ * What a close means, in terms someone holding the phone can act on.
+ *
+ * Falls through to the reason text where the code says nothing particular, so
+ * an ordinary drop still reads the way it did before there were codes.
+ */
+export function describeCloseCode(code: number | undefined, reason?: string | null): string {
+  if (code === CLOSE_CODE.policyViolation) {
+    return (
+      "The agent ended this session. Its credential was most likely revoked from the agent's " +
+      "tray, in which case pairing again is what restores it."
+    );
+  }
+  if (code === CLOSE_CODE.messageTooBig) {
+    return "The agent refused a frame this device sent for being too large, and closed the session.";
+  }
+  return describeConnectionFailure(reason);
+}
+
+/**
+ * Whether a close is worth reconnecting after.
+ *
+ * A revoked credential is refused just as fast on the next attempt, and
+ * spending the reconnect budget on it only delays saying so — the same reason
+ * an untrusted certificate is not retried.
+ */
+export function isTerminalCloseCode(code: number | undefined): boolean {
+  return code === CLOSE_CODE.policyViolation;
+}

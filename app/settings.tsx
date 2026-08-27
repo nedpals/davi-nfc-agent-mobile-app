@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Button } from "@/components/Button";
+import { Notice } from "@/components/Notice";
 import { InfoRow, InfoRows, Section } from "@/components/Section";
 import { colors, radius, spacing, typography } from "@/constants/theme";
 import { useConnection, usePairing } from "@/hooks";
@@ -25,6 +26,9 @@ import { formatDateTime, truncateMiddle } from "@/utils/format";
 
 const pinningLabel = {
   pinned: { text: "Enforced", tone: "success" },
+  // Enforced too, but the key was taken from whatever answered rather than read
+  // off the agent's own QR, so the first exchange proved nothing.
+  unverified: { text: "Enforced, never verified", tone: "warning" },
   unavailable: { text: "This build cannot verify it", tone: "danger" },
   downgraded: { text: "Cleartext — pin cannot apply", tone: "danger" },
   "not-applicable": { text: "No key held", tone: "muted" },
@@ -268,6 +272,18 @@ export default function SettingsScreen() {
                 />
                 <InfoRow label="Pin" value={pinning.text} tone={pinning.tone} />
               </InfoRows>
+              {pinningState === "unverified" ? (
+                <Notice
+                  tone="warning"
+                  message={
+                    "This pairing was made without the agent's QR, so nothing proved the agent " +
+                    "answering was the one that printed the PIN. Unpair and pair again from the " +
+                    "QR to make it verifiable."
+                  }
+                  actionLabel="Pair again"
+                  onAction={() => router.push("/(modals)/pair")}
+                />
+              ) : null}
               <Button
                 label="Unpair"
                 variant="danger"

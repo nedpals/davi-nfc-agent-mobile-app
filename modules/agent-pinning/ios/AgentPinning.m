@@ -25,35 +25,9 @@ static NSString *AgentPinningCurrentPin(void) {
   return pin;
 }
 
-#pragma mark - Policy
+#pragma mark - Pin computation
 
-@interface AgentPinningSecurityPolicy : SRSecurityPolicy
-- (instancetype)initWithExpectedPin:(NSString *)pin;
-@end
-
-@implementation AgentPinningSecurityPolicy {
-  NSString *_expectedPin;
-}
-
-- (instancetype)initWithExpectedPin:(NSString *)pin {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-  // Chain validation is switched off deliberately, and this is the subtle part.
-  // SRSecurityPolicy applies it to the stream itself via
-  // kCFStreamSSLValidatesCertificateChain, so with it on, the agent's
-  // self-signed certificate is refused during the handshake and
-  // -evaluateServerTrust:forDomain: below is never reached — the iOS mirror of
-  // OkHttp's CertificatePinner running after chain validation. The key pin
-  // replaces the chain as the identity check rather than supplementing it.
-  self = [super initWithCertificateChainValidationEnabled:NO];
-#pragma clang diagnostic pop
-  if (self) {
-    _expectedPin = [pin copy];
-  }
-  return self;
-}
-
-- (SecCertificateRef)leafCertificateOfTrust:(SecTrustRef)serverTrust CF_RETURNS_NOT_RETAINED {
+static SecCertificateRef AgentPinningLeafOfTrust(SecTrustRef serverTrust) CF_RETURNS_NOT_RETAINED {
   if (@available(iOS 15.0, *)) {
     CFArrayRef chain = SecTrustCopyCertificateChain(serverTrust);
     if (chain == NULL) {
@@ -74,7 +48,7 @@ static NSString *AgentPinningCurrentPin(void) {
 #pragma clang diagnostic pop
 }
 
-- (NSString *)pinForCertificate:(SecCertificateRef)certificate {
+static NSString *AgentPinningPinForCertificate(SecCertificateRef certificate) {
   SecKeyRef publicKey = SecCertificateCopyKey(certificate);
   if (publicKey == NULL) {
     return nil;
@@ -113,13 +87,36 @@ static NSString *AgentPinningCurrentPin(void) {
   return [@"sha256/" stringByAppendingString:[digestData base64EncodedStringWithOptions:0]];
 }
 
-- (BOOL)evaluateServerTrust:(SecTrustRef)serverTrust forDomain:(NSString *)domain {
-  SecCertificateRef leaf = [self leafCertificateOfTrust:serverTrust];
-  if (leaf == NULL) {
-    return NO;
-  }
+#pragma mark - Policy
 
-  NSString *presented = [self pinForCertificate:leaf];
+@interface AgentPinningSecurityPolicy : SRSecurityPolicy
+- (instancetype)initWithExpectedPin:(NSString *)pin;
+@end
+
+@implementation AgentPinningSecurityPolicy {
+  NSString *_expectedPin;
+}
+
+- (instancetype)initWithExpectedPin:(NSString *)pin {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  // Chain validation is switched off deliberately, and this is the subtle part.
+  // SRSecurityPolicy applies it to the stream itself via
+  // kCFStreamSSLValidatesCertificateChain, so with it on, the agent's
+  // self-signed certificate is refused during the handshake and
+  // -evaluateServerTrust:forDomain: below is never reached — the iOS mirror of
+  // OkHttp's CertificatePinner running after chain validation. The key pin
+  // replaces the chain as the identity check rather than supplementing it.
+  self = [super initWithCertificateChainValidationEnabled:NO];
+#pragma clang diagnostic pop
+  if (self) {
+    _expectedPin = [pin copy];
+  }
+  return self;
+}
+
+- (BOOL)evaluateServerTrust:(SecTrustRef)serverTrust forDomain:(NSString *)domain {
+  NSString *presented = [AgentPinning pinForServerTrust:serverTrust];
   if (presented == nil) {
     return NO;
   }
@@ -174,6 +171,14 @@ static void AgentPinningInstall(void) {
   [gPinLock lock];
   gExpectedPin = [pin copy];
   [gPinLock unlock];
+}
+
++ (NSString *)pinForServerTrust:(SecTrustRef)serverTrust {
+  SecCertificateRef leaf = AgentPinningLeafOfTrust(serverTrust);
+  if (leaf == NULL) {
+    return nil;
+  }
+  return AgentPinningPinForCertificate(leaf);
 }
 
 @end

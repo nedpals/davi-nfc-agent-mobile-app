@@ -43,6 +43,7 @@ describe("disconnect", () => {
       agentPort: 9470,
       deviceID: "device-1",
       publicKeyPin: "sha256/abc",
+      keySource: "qr" as const,
     };
 
     store.setServerUrl("192.168.1.5:9470");

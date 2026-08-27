@@ -1,6 +1,7 @@
 import {
   buildBootstrapUrl,
   buildDeviceUrl,
+  parseAgentAddress,
   formatHost,
   hostFromAgentUrl,
 } from "@/services/agent-url";
@@ -104,5 +105,36 @@ describe("formatHost", () => {
 describe("buildBootstrapUrl", () => {
   it("always uses plain HTTP on the bootstrap port", () => {
     expect(buildBootstrapUrl("wss://192.168.1.5:9470/ws")).toBe("http://192.168.1.5:9472/");
+  });
+});
+
+describe("parseAgentAddress", () => {
+  it("splits a host from the port it names", () => {
+    expect(parseAgentAddress("192.168.1.5:9470")).toEqual({ host: "192.168.1.5", port: 9470 });
+  });
+
+  it("leaves the port out when the address named none", () => {
+    expect(parseAgentAddress("kiosk.local")).toEqual({ host: "kiosk.local" });
+  });
+
+  // The colons are the address, not a port, which is the whole reason a typed
+  // address cannot be split on one.
+  it("keeps a bare IPv6 literal whole", () => {
+    expect(parseAgentAddress("fe80::1")).toEqual({ host: "fe80::1" });
+  });
+
+  it("reads a port off a bracketed IPv6 literal", () => {
+    expect(parseAgentAddress("[fe80::1]:9470")).toEqual({ host: "fe80::1", port: 9470 });
+  });
+
+  it("strips a scheme, path and query", () => {
+    expect(parseAgentAddress("wss://192.168.1.5:9470/ws?mode=device")).toEqual({
+      host: "192.168.1.5",
+      port: 9470,
+    });
+  });
+
+  it("ignores a port that is not a number", () => {
+    expect(parseAgentAddress("kiosk.local:nine")).toEqual({ host: "kiosk.local" });
   });
 });

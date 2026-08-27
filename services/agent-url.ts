@@ -112,17 +112,36 @@ export function buildDeviceUrl(input: string, options: BuildOptions = {}): strin
 }
 
 /**
- * The bare host out of anything that addresses the agent — scheme, port, path
- * and query stripped. Pairing needs it because it runs on a different port from
- * the WebSocket endpoint.
+ * The host and port out of anything that addresses the agent — scheme, path and
+ * query stripped, an IPv6 literal kept intact.
+ *
+ * A field someone types an address into needs both halves separately, and
+ * cannot get them by splitting on a colon: that is the address itself in
+ * `fe80::1`. `port` is undefined when the input named none, which is the
+ * caller's cue to use its own default rather than to guess.
  */
-export function hostFromAgentUrl(input: string): string {
+export function parseAgentAddress(input: string): { host: string; port?: number } {
   const withoutScheme = input.trim().replace(SCHEME_RE, "");
   const [beforeQuery] = splitOnce(withoutScheme, "?");
   const slash = beforeQuery.indexOf("/");
   const authority = slash === -1 ? beforeQuery : beforeQuery.slice(0, slash);
 
-  return splitAuthority(authority).host;
+  const { host, port } = splitAuthority(authority);
+  const parsed = Number.parseInt(port, 10);
+
+  return {
+    host,
+    ...(Number.isFinite(parsed) && parsed > 0 ? { port: parsed } : {}),
+  };
+}
+
+/**
+ * The bare host out of anything that addresses the agent — scheme, port, path
+ * and query stripped. Pairing needs it because it runs on a different port from
+ * the WebSocket endpoint.
+ */
+export function hostFromAgentUrl(input: string): string {
+  return parseAgentAddress(input).host;
 }
 
 /**

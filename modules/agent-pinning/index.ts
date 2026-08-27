@@ -19,6 +19,25 @@ declare class AgentPinningModule extends NativeModule {
    * treat the connection as verified rather than assume it is.
    */
   readonly isSupported: boolean;
+
+  /**
+   * POST `body` as JSON to `url`, verifying the agent by `pin` rather than by a
+   * certificate chain.
+   *
+   * Pairing needs this: it is the request that hands the pin over, so there is
+   * nothing stored for `setPin` to arm, and React Native's `fetch` offers no
+   * per-request trust hook. `pin` of `null` accepts whatever the agent presents
+   * — a trust-on-first-use pairing, which the caller reports as unverified.
+   *
+   * Rejects when the key does not match, when nothing answers, or when the
+   * answer is not HTTP. An HTTP error status resolves: it is the agent
+   * answering, and what it says is the caller's to read.
+   */
+  postPinned(
+    url: string,
+    pin: string | null,
+    body: string
+  ): Promise<{ status: number; body: string }>;
 }
 
 export default requireNativeModule<AgentPinningModule>("AgentPinning");

@@ -191,6 +191,35 @@ export interface ErrorMessage extends BaseMessage {
 // person to present the tag again rather than resending on a timer.
 export const ERROR_CODE_TAG_REMOVED = "TAG_REMOVED";
 
+/**
+ * The agent could not publish a scan or a removal to its clients.
+ *
+ * Agent 1.2.0 waits for room in its broadcast queue rather than discarding and
+ * reporting success, so a device is now told when its scan did not land. It is
+ * retryable: the queue drains.
+ */
+export const ERROR_CODE_TAG_SEND_FAILED = "TAG_SEND_FAILED";
+
+/**
+ * Earlier work has not finished — a reader still completing an operation whose
+ * caller gave up, or more requests outstanding on this connection than the
+ * agent queues. Retryable, after a pause.
+ */
+export const ERROR_CODE_BUSY = "BUSY";
+
+/**
+ * More than one tag in the field where the operation needs exactly one. Not
+ * retryable: the tags have to be separated first.
+ */
+export const ERROR_CODE_MULTIPLE_TAGS = "MULTIPLE_TAGS";
+
+/**
+ * The largest frame the agent's device endpoint accepts (256 KB), as of 1.2.0.
+ * It drops the session of a device that exceeds it rather than answering, so a
+ * frame this size is checked before it is sent.
+ */
+export const MAX_DEVICE_MESSAGE_SIZE = 256 * 1024;
+
 // The outcomes an operation can report, from the agent's error taxonomy.
 export const DEVICE_ERROR_CODES = {
   notSupported: "NOT_SUPPORTED",
@@ -204,6 +233,12 @@ export const DEVICE_ERROR_CODES = {
   capacityExceeded: "CAPACITY_EXCEEDED",
 
   transceiveFailed: "TRANSCEIVE_FAILED",
+
+  // Reported by the agent rather than by this device, and listed here because
+  // an operation can end on one: more than one tag in the field, and work the
+  // agent could not start because earlier work is still draining.
+  multipleTags: "MULTIPLE_TAGS",
+  busy: "BUSY",
 } as const;
 
 export type DeviceErrorCode = (typeof DEVICE_ERROR_CODES)[keyof typeof DEVICE_ERROR_CODES];
@@ -318,7 +353,33 @@ export interface AgentCredential {
   deviceID: string;
   deviceToken: string;
   publicKeyPin: string;
+  /**
+   * Where this agent's key came from, which is what decides whether it means
+   * anything. Written by `loadCredential` for a credential stored before the
+   * field existed, so nothing downstream has to handle its absence.
+   */
+  keySource: KeySource;
 }
+
+/**
+ * How the agent's key reached this device.
+ *
+ * A single boolean could not carry this: "nothing verified the key" and "there
+ * is no key to verify" are different answers, and reading them apart meant
+ * consulting `publicKeyPin` first and in the right order. Naming the three
+ * states removes that coupling.
+ */
+export type KeySource =
+  /** Read off the agent's own pairing QR, and pinned for the exchange itself. */
+  | "qr"
+  /**
+   * Taken from whatever answered the pairing request. The PIN authorized the
+   * exchange, but nothing proved the agent answering was the one that printed
+   * it, so this key is trusted on first use.
+   */
+  | "response"
+  /** The agent serves no TLS, so there is no key and nothing to pin. */
+  | "none";
 
 // The part of a credential the UI may hold. The token is deliberately absent:
 // it is a bearer secret and the keychain is the only copy that should exist.
@@ -330,6 +391,7 @@ export function toPairingSummary(credential: AgentCredential): PairingSummary {
     agentPort: credential.agentPort,
     deviceID: credential.deviceID,
     publicKeyPin: credential.publicKeyPin,
+    keySource: credential.keySource,
   };
 }
 

@@ -13,21 +13,31 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Button } from "@/components/Button";
 import { ModalHeader } from "@/components/ModalHeader";
 import { Notice } from "@/components/Notice";
+import { PairingScanner } from "@/components/PairingScanner";
 import { Section } from "@/components/Section";
+import { WS_CONFIG } from "@/constants/config";
 import { colors, fontFamily, radius, spacing, typography } from "@/constants/theme";
 import { useConnection, usePairing } from "@/hooks";
+import { formatHost, parseAgentAddress } from "@/services/agent-url";
 import { describeConnectionFailure } from "@/services/connection-errors";
-import { formatHost } from "@/services/agent-url";
+import { PairingUriError, isPairingUri, parsePairingUri } from "@/services/pairing-uri";
 
 const PIN_LENGTH = 6;
 
 /**
- * Pairing, reached by tapping the agent to connect to.
+ * Pairing, reached by tapping the agent to connect to, or by opening the
+ * agent's pairing QR.
  *
  * It is a step of connecting rather than a setting: the address comes from
- * whatever named the agent — a discovery record, a typed address — so the only
- * thing left to ask for is the PIN, and the connection is dialled here once
- * there is a credential to dial it with.
+ * whatever named the agent — a discovery record, a typed address, a pairing
+ * link — so the only thing left to ask for is the PIN, and the connection is
+ * dialled here once there is a credential to dial it with.
+ *
+ * The QR carries the agent's key pin, which is what lets this device verify the
+ * agent before handing anything to it. Agent 1.2.0 serves pairing over TLS on
+ * its own port for that reason, having served it in the clear before. A typed
+ * PIN still pairs, but nothing proves what answered, so that pairing is
+ * recorded and shown as unverified.
  */
 export default function PairScreen() {
   const router = useRouter();
@@ -36,24 +46,67 @@ export default function PairScreen() {
     port?: string;
     name?: string;
     url?: string;
+    // Set when a davi-pair:// link opened this screen.
+    spki?: string;
+    code?: string;
   }>();
 
   const { connect, deviceName } = useConnection();
   const { pair, isPairing } = usePairing();
 
-  const [pin, setPin] = useState("");
+  // What the address field holds, which may name a port. `host` and `port` are
+  // read out of it rather than stored apart: typing "192.168.1.5:9470" into a
+  // field that kept it whole reached formatHost as a host, and its IPv6
+  // bracketing turned it into "[192.168.1.5:9470]".
+  const [address, setAddress] = useState(
+    params.host ? `${params.host}${params.port ? `:${params.port}` : ""}` : ""
+  );
+  const [agentName, setAgentName] = useState(params.name ?? "");
+  const [keyPin, setKeyPin] = useState<string | null>(params.spki ?? null);
+  const [pin, setPin] = useState(params.code ?? "");
   const [name, setName] = useState(deviceName ?? "");
   const [error, setError] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [pasted, setPasted] = useState("");
+  const [showPaste, setShowPaste] = useState(false);
 
-  const host = params.host ?? "";
-  const port = params.port ?? "";
-  const target = params.url || `${formatHost(host)}${port ? `:${port}` : ""}`;
-  const address = port ? `${formatHost(host)}:${port}` : formatHost(host);
+  const { host, port } = parseAgentAddress(address);
+  const shownAddress = host
+    ? `${formatHost(host)}:${port ?? WS_CONFIG.DEFAULT_PORT}`
+    : "";
+  const target = params.url || (host ? `${formatHost(host)}:${port ?? WS_CONFIG.DEFAULT_PORT}` : "");
 
   // The modal is one of several stacked over the scanner, and finishing here
   // means the whole detour is over rather than one screen of it.
   const finish = () => router.dismissAll();
+
+  const acceptInvitation = (invitation: {
+    host: string;
+    port: number;
+    spki: string;
+    code?: string;
+    name?: string;
+  }) => {
+    setAddress(`${invitation.host}:${invitation.port}`);
+    setKeyPin(invitation.spki);
+    if (invitation.code) setPin(invitation.code);
+    if (invitation.name) setAgentName(invitation.name);
+    setError(null);
+    setScanning(false);
+    setShowPaste(false);
+    setPasted("");
+  };
+
+  const acceptPasted = () => {
+    try {
+      acceptInvitation(parsePairingUri(pasted));
+    } catch (failure) {
+      setError(
+        failure instanceof PairingUriError ? failure.message : "That pairing link could not be read."
+      );
+    }
+  };
 
   const dial = async () => {
     setIsConnecting(true);
@@ -78,7 +131,10 @@ export default function PairScreen() {
     }
 
     try {
-      await pair(host, pin.trim(), name.trim() || deviceName);
+      await pair(host, pin.trim(), name.trim() || deviceName, {
+        keyPin,
+        port: port ?? WS_CONFIG.DEFAULT_PORT,
+      });
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
       return;
@@ -90,13 +146,13 @@ export default function PairScreen() {
 
   const busy = isPairing || isConnecting;
 
-  if (!host) {
+  if (scanning) {
     return (
       <SafeAreaView style={styles.screen}>
-        <ModalHeader title="Pair with agent" onClose={finish} />
-        <View style={styles.body}>
-          <Notice tone="danger" message="No agent address was given to pair with." />
-        </View>
+        <ModalHeader title="Scan pairing QR" onClose={() => setScanning(false)} />
+        <ScrollView contentContainerStyle={styles.body}>
+          <PairingScanner onScanned={acceptInvitation} onCancel={() => setScanning(false)} />
+        </ScrollView>
       </SafeAreaView>
     );
   }
@@ -110,16 +166,85 @@ export default function PairScreen() {
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
         <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
-          <View style={styles.identity}>
-            <Text style={styles.agentName} numberOfLines={1}>
-              {params.name || "Agent"}
-            </Text>
-            <Text style={styles.agentAddress} numberOfLines={1}>
-              {address}
-            </Text>
-          </View>
+          {host ? (
+            <View style={styles.identity}>
+              <Text style={styles.agentName} numberOfLines={1}>
+                {agentName || "Agent"}
+              </Text>
+              <Text style={styles.agentAddress} numberOfLines={1}>
+                {shownAddress}
+              </Text>
+            </View>
+          ) : null}
 
           {error ? <Notice tone="danger" message={error} /> : null}
+
+          {keyPin ? (
+            <Notice
+              tone="info"
+              message="This agent's key came from its pairing code, so the pairing connection can be verified."
+            />
+          ) : (
+            <Notice
+              tone="warning"
+              message={
+                "Without the agent's pairing QR this device cannot verify what answers. Pairing " +
+                "still works and the PIN still protects it, but the pairing will be recorded as " +
+                "unverified."
+              }
+            />
+          )}
+
+          <Section
+            title="Pairing QR"
+            footer="The agent prints it at startup, beside its PIN. It carries the key this device recognizes the agent by."
+          >
+            <Button label="Scan the agent's QR" onPress={() => setScanning(true)} disabled={busy} />
+            <Button
+              label={showPaste ? "Hide link box" : "Paste a pairing link"}
+              variant="secondary"
+              onPress={() => setShowPaste((open) => !open)}
+              style={styles.stacked}
+            />
+            {showPaste ? (
+              <View style={styles.pasteRow}>
+                <TextInput
+                  style={styles.input}
+                  value={pasted}
+                  onChangeText={setPasted}
+                  placeholder="davi-pair://…"
+                  placeholderTextColor={colors.textFaint}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  multiline
+                  accessibilityLabel="Pairing link"
+                />
+                <Button
+                  label="Use this link"
+                  onPress={acceptPasted}
+                  disabled={!isPairingUri(pasted)}
+                />
+              </View>
+            ) : null}
+          </Section>
+
+          {!host ? (
+            <Section
+              title="Agent address"
+              footer="Only needed when no pairing link named one. Add :port if the agent does not serve on 9470."
+            >
+              <TextInput
+                style={styles.input}
+                value={address}
+                onChangeText={setAddress}
+                placeholder="192.168.1.5"
+                placeholderTextColor={colors.textFaint}
+                autoCapitalize="none"
+                autoCorrect={false}
+                accessibilityLabel="Agent address"
+              />
+            </Section>
+          ) : null}
 
           <Section
             title="PIN"
@@ -133,7 +258,7 @@ export default function PairScreen() {
               placeholderTextColor={colors.textFaint}
               keyboardType="number-pad"
               maxLength={PIN_LENGTH}
-              autoFocus
+              autoFocus={!!host}
               returnKeyType="go"
               onSubmitEditing={handlePair}
               accessibilityLabel="Pairing PIN"
@@ -156,7 +281,7 @@ export default function PairScreen() {
             label={isPairing ? "Pairing…" : isConnecting ? "Connecting…" : "Pair and connect"}
             onPress={handlePair}
             loading={busy}
-            disabled={pin.length !== PIN_LENGTH}
+            disabled={pin.length !== PIN_LENGTH || !host}
           />
 
           {/* An agent started without TLS and without a secret needs no
@@ -166,7 +291,7 @@ export default function PairScreen() {
             label="Connect without pairing"
             variant="secondary"
             onPress={dial}
-            disabled={busy}
+            disabled={busy || !host}
             style={styles.stacked}
           />
         </ScrollView>
@@ -218,6 +343,10 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     fontSize: 15,
     color: colors.text,
+  },
+  pasteRow: {
+    marginTop: spacing.sm,
+    gap: spacing.sm,
   },
   stacked: {
     marginTop: spacing.sm,
