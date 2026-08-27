@@ -18,7 +18,7 @@ import { Section } from "@/components/Section";
 import { WS_CONFIG } from "@/constants/config";
 import { colors, fontFamily, radius, spacing, typography } from "@/constants/theme";
 import { useConnection, usePairing } from "@/hooks";
-import { formatHost } from "@/services/agent-url";
+import { formatHost, parseAgentAddress } from "@/services/agent-url";
 import { describeConnectionFailure } from "@/services/connection-errors";
 import { PairingUriError, isPairingUri, parsePairingUri } from "@/services/pairing-uri";
 
@@ -54,8 +54,13 @@ export default function PairScreen() {
   const { connect, deviceName } = useConnection();
   const { pair, isPairing } = usePairing();
 
-  const [host, setHost] = useState(params.host ?? "");
-  const [port, setPort] = useState(params.port ?? "");
+  // What the address field holds, which may name a port. `host` and `port` are
+  // read out of it rather than stored apart: typing "192.168.1.5:9470" into a
+  // field that kept it whole reached formatHost as a host, and its IPv6
+  // bracketing turned it into "[192.168.1.5:9470]".
+  const [address, setAddress] = useState(
+    params.host ? `${params.host}${params.port ? `:${params.port}` : ""}` : ""
+  );
   const [agentName, setAgentName] = useState(params.name ?? "");
   const [keyPin, setKeyPin] = useState<string | null>(params.spki ?? null);
   const [pin, setPin] = useState(params.code ?? "");
@@ -66,8 +71,11 @@ export default function PairScreen() {
   const [pasted, setPasted] = useState("");
   const [showPaste, setShowPaste] = useState(false);
 
-  const target = params.url || `${formatHost(host)}${port ? `:${port}` : ""}`;
-  const address = port ? `${formatHost(host)}:${port}` : formatHost(host);
+  const { host, port } = parseAgentAddress(address);
+  const shownAddress = host
+    ? `${formatHost(host)}:${port ?? WS_CONFIG.DEFAULT_PORT}`
+    : "";
+  const target = params.url || (host ? `${formatHost(host)}:${port ?? WS_CONFIG.DEFAULT_PORT}` : "");
 
   // The modal is one of several stacked over the scanner, and finishing here
   // means the whole detour is over rather than one screen of it.
@@ -80,8 +88,7 @@ export default function PairScreen() {
     code?: string;
     name?: string;
   }) => {
-    setHost(invitation.host);
-    setPort(String(invitation.port));
+    setAddress(`${invitation.host}:${invitation.port}`);
     setKeyPin(invitation.spki);
     if (invitation.code) setPin(invitation.code);
     if (invitation.name) setAgentName(invitation.name);
@@ -126,7 +133,7 @@ export default function PairScreen() {
     try {
       await pair(host, pin.trim(), name.trim() || deviceName, {
         keyPin,
-        port: Number.parseInt(port, 10) || WS_CONFIG.DEFAULT_PORT,
+        port: port ?? WS_CONFIG.DEFAULT_PORT,
       });
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
@@ -165,7 +172,7 @@ export default function PairScreen() {
                 {agentName || "Agent"}
               </Text>
               <Text style={styles.agentAddress} numberOfLines={1}>
-                {address}
+                {shownAddress}
               </Text>
             </View>
           ) : null}
@@ -222,11 +229,14 @@ export default function PairScreen() {
           </Section>
 
           {!host ? (
-            <Section title="Agent address" footer="Only needed when no pairing link named one.">
+            <Section
+              title="Agent address"
+              footer="Only needed when no pairing link named one. Add :port if the agent does not serve on 9470."
+            >
               <TextInput
                 style={styles.input}
-                value={host}
-                onChangeText={setHost}
+                value={address}
+                onChangeText={setAddress}
                 placeholder="192.168.1.5"
                 placeholderTextColor={colors.textFaint}
                 autoCapitalize="none"
