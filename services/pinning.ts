@@ -28,7 +28,17 @@ function getNativeModule(): PinningNativeModule | null {
 }
 
 export type PinningStatus =
+  // A pin is held, it was confirmed at pairing, and this build can enforce it.
   | "pinned"
+  /**
+   * A pin is held and enforced, but nothing confirmed it was this agent's.
+   *
+   * Pairing without the agent's QR takes the key from whatever answered, so it
+   * still catches a later substitution and still proves nothing about the
+   * first exchange. Distinct from "not-applicable": there the answer is that
+   * there is no key to check, and here it is that the key was never checked.
+   */
+  | "unverified"
   // The agent serves no TLS, so there is no key to pin.
   | "not-applicable"
   // A pin is held but this build cannot check it.
@@ -60,12 +70,20 @@ export function describePinning(credential: AgentCredential | null): PinningStat
   const pin = credential?.publicKeyPin ?? "";
   const native = getNativeModule();
 
+  // Checked before anything else: an agent serving no TLS has no key to check,
+  // which is a different answer from a key nothing checked.
   if (!pin) {
     native?.setPin(null);
     return { status: "not-applicable" };
   }
 
-  return native?.isSupported ? { status: "pinned", pin } : { status: "unavailable", pin };
+  if (!native?.isSupported) {
+    return { status: "unavailable", pin };
+  }
+
+  // Absent on a credential stored before the field existed, which is the same
+  // situation it describes: that pairing was not pinned either.
+  return { status: credential?.pinVerified ? "pinned" : "unverified", pin };
 }
 
 /**
@@ -101,8 +119,11 @@ export function applyPinning(credential: AgentCredential | null, wsUrl: string):
     );
   }
 
+  // Armed either way: a pin taken from whatever answered still refuses a
+  // different key later, which is worth having even though it proves nothing
+  // about the exchange that recorded it.
   native.setPin(pin);
-  return { status: "pinned", pin };
+  return { status: credential?.pinVerified ? "pinned" : "unverified", pin };
 }
 
 /**
