@@ -5,7 +5,10 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "davinfcscanner",
+    "scheme": [
+      "davinfcscanner",
+      "davi-pair"
+    ],
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "ios": {
@@ -16,7 +19,8 @@
         "NSLocalNetworkUsageDescription": "Discover NFC Agent servers on your local network",
         "NSBonjourServices": [
           "_nfc-device._tcp"
-        ]
+        ],
+        "NSCameraUsageDescription": "Scan the pairing QR the NFC agent shows on its screen."
       }
     },
     "android": {
@@ -34,7 +38,8 @@
         "android.permission.ACCESS_WIFI_STATE",
         "android.permission.ACCESS_NETWORK_STATE",
         "android.permission.CHANGE_WIFI_MULTICAST_STATE",
-        "android.permission.INTERNET"
+        "android.permission.INTERNET",
+        "android.permission.CAMERA"
       ]
     },
     "web": {
@@ -64,7 +69,13 @@
         }
       ],
       "./plugins/with-android-agent-network",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Scan the pairing QR the NFC agent shows on its screen."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

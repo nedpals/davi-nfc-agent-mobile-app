@@ -3,6 +3,11 @@ import type { AgentCredential } from "@/types/protocol";
 type PinningNativeModule = {
   isSupported: boolean;
   setPin: (pin: string | null) => void;
+  postPinned: (
+    url: string,
+    pin: string | null,
+    body: string
+  ) => Promise<{ status: number; body: string }>;
 };
 
 // The module is absent from Expo Go and from any build predating it, so it is
@@ -98,4 +103,30 @@ export function applyPinning(credential: AgentCredential | null, wsUrl: string):
 
   native.setPin(pin);
   return { status: "pinned", pin };
+}
+
+/**
+ * POST to the agent with its key pinned, for the one request that happens
+ * before a credential exists.
+ *
+ * `pin` of `null` is a pairing the caller has decided to make unverified. It is
+ * still refused where the module is absent: a build that cannot pin cannot tell
+ * a trust-on-first-use pairing from a verified one afterwards either, and a
+ * pairing that claims neither is worse than no pairing.
+ */
+export async function postPinned(
+  url: string,
+  pin: string | null,
+  body: unknown
+): Promise<{ status: number; body: string }> {
+  const native = getNativeModule();
+  if (!native?.isSupported) {
+    throw new PinningError(
+      "This build cannot verify the agent's key, so it cannot pair. Pairing needs a " +
+        "development build; it is not available in Expo Go.",
+      "unavailable"
+    );
+  }
+
+  return native.postPinned(url, pin, JSON.stringify(body));
 }

@@ -287,7 +287,12 @@ describe("pair screen", () => {
     fireEvent.press(screen.getByText("Pair and connect"));
 
     await waitFor(() => expect(websocketService.connectAndRegister).toHaveBeenCalledWith(agent.url));
-    expect(pairWithAgent).toHaveBeenCalledWith("192.168.1.5", "123456", expect.any(String));
+    // No key pin: this agent was tapped in the discovery list rather than
+    // arrived at through its pairing QR, so the pairing is unverified.
+    expect(pairWithAgent).toHaveBeenCalledWith("192.168.1.5", "123456", expect.any(String), {
+      keyPin: null,
+      port: 9470,
+    });
     expect(mockRouter.dismissAll).toHaveBeenCalled();
   });
 
@@ -318,13 +323,15 @@ describe("pair screen", () => {
     expect(pairWithAgent).not.toHaveBeenCalled();
   });
 
-  it("says so rather than pairing with nothing", async () => {
+  // Reached with nothing, the screen is still the way in: the agent's pairing
+  // QR names its own address, so asking for one is a better answer than
+  // refusing outright the way this used to.
+  it("asks for an address when it was given none", async () => {
     mockParams = {};
     render(<PairScreen />);
 
-    await waitFor(() =>
-      expect(screen.getByText("No agent address was given to pair with.")).toBeTruthy()
-    );
+    await waitFor(() => expect(screen.getByLabelText("Agent address")).toBeTruthy());
+    expect(screen.getByText("Scan the agent's QR")).toBeTruthy();
   });
 });
 

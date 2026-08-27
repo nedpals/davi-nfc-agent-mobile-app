@@ -80,18 +80,48 @@ device sends the agent — read, write, raw exchange, lock, and how long it can
 hold a tag — read from the same function that builds the declaration, so the
 screen cannot promise something the agent will not be told.
 
-**Pairing.** **Settings → Pairing** exchanges the six-digit PIN the agent shows
-on the kiosk for this device's own credential. The exchange runs over plain HTTP
-on port 9472, because a device that has not yet learned the agent's key cannot
-verify a TLS connection to it; the PIN is what protects it, and five wrong
-attempts lock pairing until the agent restarts.
+**Pairing.** Pairing exchanges the six-digit PIN the agent shows on the kiosk
+for this device's own credential. It runs over TLS on the agent's own port
+(`https://<host>:9470/pair`), pinned to the key the agent's QR carries. Five
+wrong PINs lock pairing until the agent restarts.
+
+**Read the QR.** The agent prints one at startup beside its PIN, encoding
+`davi-pair://<host>:9470/?spki=…&code=…&name=…`. `spki` is the agent's public
+key pin, and it is the one value a device cannot obtain safely over the network:
+everything else the app could ask the network for, but a key the network hands
+over is a key an attacker can substitute. Three ways in, all landing on the same
+screen: **scan it in the app** (Pair → *Scan the agent's QR*), **read it with
+the phone's own camera**, which opens the link straight into the pair screen, or
+**paste the link** into the box on that screen.
+
+**Pairing without the QR still works, and says that it did.** Typing a bare PIN
+pairs trust-on-first-use: the PIN authorizes the exchange, but nothing proves
+the agent answering is the one that printed it, so the credential is stored with
+`pinVerified: false` and the screen says so before it is used. Read the QR where
+you can.
+
+> Agent 1.2.0 moved this. Pairing used to be a plain HTTP POST to the bootstrap
+> listener on 9472, which handed the token and the key pin to anyone watching
+> the network and let an active attacker substitute a pin of their own. That
+> listener keeps its port and stays cleartext — it hands out the certificate
+> authority to a device that does not trust the agent's certificate yet — but it
+> no longer routes `/pair`, so this app does not pair with agents older than
+> 1.2.0.
 
 What comes back is a `deviceToken`, presented on every later connection, and the
-agent's `publicKeyPin`. Both go to the keychain / keystore — the token is shown
-once, since the agent keeps only its hash. Each device's credential is revocable
-on its own from the agent's tray, which is what the shared API secret cannot do:
-rotating that logs out everything at once. The secret still works and remains in
-Settings as the fallback for an agent nobody has paired with.
+agent's `publicKeyPin`, which repeats the `spki` the QR carried and is checked
+against it. Both go to the keychain / keystore — the token is shown once, since
+the agent keeps only its hash. Each device's credential is revocable on its own
+from the agent's tray, which is what the shared API secret cannot do: rotating
+that logs out everything at once. The secret still works and remains in Settings
+as the fallback for an agent nobody has paired with.
+
+**A revoked credential now ends the session it is on.** The agent used to check
+a credential once, at the upgrade, so a device revoked while connected kept
+streaming scans until it reconnected — which for a heartbeating device is never.
+Agent 1.2.0 closes the session with a policy violation (1008) instead. The app
+reads the close code, says the credential was revoked, and stops reconnecting:
+it is refused just as fast on the next attempt.
 
 **TLS.** The agent generates and persists a certificate on first run, so it
 serves `wss://` unless started with `-auto-tls=false`. The app assumes TLS
@@ -126,7 +156,8 @@ An unrecognised failure is shown verbatim. Flattening it into something generic
 would hide the only evidence of what went wrong.
 
 **A failure that cannot come out differently is not retried.** An untrusted
-certificate and a mismatched pin both need someone to pair; retrying them spends
+certificate, a mismatched pin and a revoked credential all need someone to pair;
+retrying them spends
 the reconnect budget to arrive at the same place, and the agent's log fills with
 one handshake rejection per attempt. Those stop the loop and report. An agent
 that merely did not answer stays retryable — it may be starting, or the network
@@ -162,6 +193,16 @@ self-signed certificate before the pin is consulted, exactly as
 `CertificatePinner` does on Android. The key pin replaces the chain as the
 identity check. `SecKeyCopyExternalRepresentation` returns the raw key rather
 than SPKI DER, so the 26-byte ASN.1 P-256 header is prepended before hashing.
+
+**Pairing needs the same check on an ordinary HTTPS request**, and that is a
+third path again: it is the request that *hands over* the pin, so there is
+nothing stored for `setPin` to arm, and RN's `fetch` offers no per-request trust
+hook. `postPinned` builds a client for that one request and throws it away — an
+`OkHttpClient` carrying the same trust manager on Android, an ephemeral
+`URLSession` whose delegate runs the same comparison on iOS. Passing a null pin
+is the deliberate trust-on-first-use pairing, and it is still refused where the
+module is absent: a build that cannot pin cannot tell a verified pairing from an
+unverified one afterwards either.
 
 Since RN offers no injection point on iOS, the module swizzles
 `-[SRWebSocket initWithURLRequest:protocols:]` onto the `securityPolicy:`
@@ -199,6 +240,19 @@ After that: `tagScanned`, `tagRemoved`, a `deviceHeartbeat` every 10 seconds, an
 `goodbye` before an intentional disconnect. Errors carry `retryable` alongside
 `code`, which is the field worth acting on — except `TAG_REMOVED`, where the
 retry is asking the person to present the tag again.
+
+`BUSY` and `MULTIPLE_TAGS` joined that taxonomy in agent 1.2.0 — work the agent
+could not start because earlier work is still draining, and more than one tag in
+the field where the operation needs exactly one. The first is retryable after a
+pause; the second needs the tags separated first. `TAG_SEND_FAILED` is now what
+a scan the agent could not publish comes back as, rather than a success it
+quietly dropped.
+
+**Frames are capped at 256 KB.** The agent's device endpoint set no read limit
+before 1.2.0 and now drops the session of a device that exceeds one, without
+answering. A tag whose contents would reach that is refused here instead, where
+the cause is known — otherwise it would take the connection down and read as a
+network fault.
 
 An error frame is recorded without being treated as a lost connection: the
 socket is still open and still registered, and one refused tag is not a reason

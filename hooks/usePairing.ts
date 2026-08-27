@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { clearCredential, loadCredential, saveCredential } from "@/services/credentials";
-import { pairWithAgent } from "@/services/pairing";
+import { type PairOptions, pairWithAgent } from "@/services/pairing";
 import { describePinning } from "@/services/pinning";
 import { useAppStore } from "@/stores";
 import { toPairingSummary } from "@/types/protocol";
@@ -32,10 +32,10 @@ export function usePairing() {
   }, [refresh]);
 
   const pair = useCallback(
-    async (host: string, pin: string, deviceName: string) => {
+    async (host: string, pin: string, deviceName: string, options: PairOptions) => {
       setIsPairing(true);
       try {
-        const credential = await pairWithAgent(host, pin, deviceName);
+        const credential = await pairWithAgent(host, pin, deviceName, options);
         // The token comes back exactly once, so it is stored before anything
         // else can fail.
         await saveCredential(credential);

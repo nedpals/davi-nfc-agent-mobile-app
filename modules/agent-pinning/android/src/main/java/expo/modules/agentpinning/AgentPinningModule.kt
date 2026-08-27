@@ -5,11 +5,15 @@ import com.facebook.react.modules.network.CustomClientBuilder
 import com.facebook.react.modules.websocket.WebSocketModule
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
+import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
 
@@ -60,6 +64,19 @@ internal class PinningClientBuilder(private val pin: String) : CustomClientBuild
   }
 }
 
+/**
+ * Accepts whatever the agent presents, for a pairing that has no pin yet.
+ *
+ * Only reachable when the caller asked for an unpinned pairing: the PIN is what
+ * authorizes the exchange in that case, and the app reports the result as
+ * unverified rather than as a pairing.
+ */
+internal class AcceptAnyTrustManager : X509TrustManager {
+  override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) = Unit
+  override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) = Unit
+  override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+}
+
 class AgentPinningModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("AgentPinning")
@@ -73,5 +90,45 @@ class AgentPinningModule : Module() {
     Function("setPin") { pin: String? ->
       WebSocketModule.setCustomClientBuilder(pin?.let { PinningClientBuilder(it) })
     }
+
+    // Pairing is a one-off POST that has to be verified by the same pin the
+    // socket is, and it happens before any pin is stored — so it cannot go
+    // through setPin, and RN's fetch has no per-request trust hook. This builds
+    // a client for this one request and throws it away.
+    AsyncFunction("postPinned") { url: String, pin: String?, body: String ->
+      val builder = OkHttpClient.Builder()
+        .connectTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .readTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+
+      // A null pin is a deliberate trust-on-first-use pairing, which still has
+      // to reach an agent serving a certificate nothing here signed.
+      val trustManager = if (pin != null) PinnedTrustManager(pin) else AcceptAnyTrustManager()
+      val sslContext = SSLContext.getInstance("TLS")
+      sslContext.init(null, arrayOf<X509TrustManager>(trustManager), SecureRandom())
+      builder.sslSocketFactory(sslContext.socketFactory, trustManager)
+
+      // The agent's certificate names its hostnames and LAN addresses, but a
+      // device reaching it by an address the certificate does not carry is a
+      // working setup: the key pin is the identity check here, and hostname
+      // verification would refuse before it is consulted.
+      builder.hostnameVerifier { _, _ -> true }
+
+      val request = Request.Builder()
+        .url(url)
+        .post(body.toRequestBody(JSON_MEDIA_TYPE))
+        .build()
+
+      builder.build().newCall(request).execute().use { response ->
+        mapOf(
+          "status" to response.code,
+          "body" to (response.body?.string() ?: ""),
+        )
+      }
+    }
+  }
+
+  private companion object {
+    const val TIMEOUT_SECONDS = 15L
+    val JSON_MEDIA_TYPE = "application/json".toMediaType()
   }
 }

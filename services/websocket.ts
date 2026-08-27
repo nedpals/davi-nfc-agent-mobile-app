@@ -9,6 +9,8 @@ import {
 import { buildDeviceUrl } from "@/services/agent-url";
 import {
   describeConnectionFailure,
+  describeCloseCode,
+  isTerminalCloseCode,
   isTerminalConnectionFailure,
 } from "@/services/connection-errors";
 import { loadCredential } from "@/services/credentials";
@@ -32,6 +34,7 @@ import {
   type DeviceWriteRequestMessage,
   type DeviceWriteRequestPayload,
   type DeviceWriteResponsePayload,
+  MAX_DEVICE_MESSAGE_SIZE,
   type ErrorMessage,
   type TagScannedPayload,
 } from "@/types/protocol";
@@ -224,13 +227,17 @@ class WebSocketService {
 
       socket.onclose = (event) => {
         console.log("[WebSocket] Closed:", event.code, event.reason);
-        const failure = describeConnectionFailure(event.reason);
+        // The close code carries what the reason text often does not: a
+        // credential revoked from the agent's tray ends the session with a
+        // policy violation, and the reason may be empty.
+        const failure = describeCloseCode(event.code, event.reason);
         // A socket that closes before it ever opened has to reject the connect
         // call itself; nothing else will, and the caller would wait forever.
         settle(new Error(failure));
 
-        if (isTerminalConnectionFailure(event.reason)) {
-          // Retrying cannot change a certificate this device does not trust.
+        if (isTerminalCloseCode(event.code) || isTerminalConnectionFailure(event.reason)) {
+          // Retrying cannot change a certificate this device does not trust,
+          // and a revoked credential is refused just as fast every time.
           this.teardownState();
           this.stopReconnecting(failure);
           return;
@@ -456,7 +463,26 @@ class WebSocketService {
       return false;
     }
 
-    this.ws.send(JSON.stringify(message));
+    const frame = JSON.stringify(message);
+
+    // The agent caps an inbound frame at 256 KB and drops the session of a
+    // device that exceeds it, without answering. A tag whose contents are large
+    // enough to reach that would otherwise take the connection down and look
+    // like a network fault, so it is refused here where the cause is known.
+    if (frame.length > MAX_DEVICE_MESSAGE_SIZE) {
+      console.error(
+        `[WebSocket] Refusing a ${frame.length}-byte ${message.type}:`,
+        `the agent accepts at most ${MAX_DEVICE_MESSAGE_SIZE}.`,
+      );
+      useAppStore
+        .getState()
+        .setConnectionError(
+          "A tag's contents were too large to send to the agent, so it was not sent.",
+        );
+      return false;
+    }
+
+    this.ws.send(frame);
     return true;
   }
 

@@ -191,6 +191,35 @@ export interface ErrorMessage extends BaseMessage {
 // person to present the tag again rather than resending on a timer.
 export const ERROR_CODE_TAG_REMOVED = "TAG_REMOVED";
 
+/**
+ * The agent could not publish a scan or a removal to its clients.
+ *
+ * Agent 1.2.0 waits for room in its broadcast queue rather than discarding and
+ * reporting success, so a device is now told when its scan did not land. It is
+ * retryable: the queue drains.
+ */
+export const ERROR_CODE_TAG_SEND_FAILED = "TAG_SEND_FAILED";
+
+/**
+ * Earlier work has not finished — a reader still completing an operation whose
+ * caller gave up, or more requests outstanding on this connection than the
+ * agent queues. Retryable, after a pause.
+ */
+export const ERROR_CODE_BUSY = "BUSY";
+
+/**
+ * More than one tag in the field where the operation needs exactly one. Not
+ * retryable: the tags have to be separated first.
+ */
+export const ERROR_CODE_MULTIPLE_TAGS = "MULTIPLE_TAGS";
+
+/**
+ * The largest frame the agent's device endpoint accepts (256 KB), as of 1.2.0.
+ * It drops the session of a device that exceeds it rather than answering, so a
+ * frame this size is checked before it is sent.
+ */
+export const MAX_DEVICE_MESSAGE_SIZE = 256 * 1024;
+
 // The outcomes an operation can report, from the agent's error taxonomy.
 export const DEVICE_ERROR_CODES = {
   notSupported: "NOT_SUPPORTED",
@@ -204,6 +233,12 @@ export const DEVICE_ERROR_CODES = {
   capacityExceeded: "CAPACITY_EXCEEDED",
 
   transceiveFailed: "TRANSCEIVE_FAILED",
+
+  // Reported by the agent rather than by this device, and listed here because
+  // an operation can end on one: more than one tag in the field, and work the
+  // agent could not start because earlier work is still draining.
+  multipleTags: "MULTIPLE_TAGS",
+  busy: "BUSY",
 } as const;
 
 export type DeviceErrorCode = (typeof DEVICE_ERROR_CODES)[keyof typeof DEVICE_ERROR_CODES];
@@ -318,6 +353,14 @@ export interface AgentCredential {
   deviceID: string;
   deviceToken: string;
   publicKeyPin: string;
+  /**
+   * Whether the pairing connection itself was pinned to this key, which is what
+   * a pairing QR makes possible. False means the key was taken from whatever
+   * answered — the PIN authorized the exchange, but nothing proved the agent
+   * answering was the one that printed it. Absent on a credential stored before
+   * the field existed, which is that same situation.
+   */
+  pinVerified?: boolean;
 }
 
 // The part of a credential the UI may hold. The token is deliberately absent:
